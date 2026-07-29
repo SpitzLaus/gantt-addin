@@ -1,0 +1,21 @@
+{
+  "name": "gantt-powerpoint-addin",
+  "version": "1.0.0",
+  "description": "PowerPoint add-in to easily create Gantt charts (ThinkCell-style) as native shapes.",
+  "scripts": {
+    "start": "office-addin-debugging start manifest.xml",
+    "stop": "office-addin-debugging stop manifest.xml",
+    "validate": "office-addin-manifest validate manifest.xml",
+    "certs": "office-addin-dev-certs install",
+    "build": "node build.js",
+    "dev": "http-server . -p 3000 -S -C %USERPROFILE%\\.office-addin-dev-certs\\localhost.crt -K %USERPROFILE%\\.office-addin-dev-certs\\localhost.key --cors -c-1",
+    "serve": "http-server . -p 3000 --cors -c-1"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "http-server": "^14.1.1",
+    "office-addin-debugging": "^6.0.0",
+    "office-addin-manifest": "^1.13.0"
+  }
+}

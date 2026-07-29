@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gantt Chart Builder</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="taskpane.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>Gantt Chart Builder</h1>
+    <p class="subtitle">ThinkCell-style Gantt charts as native PowerPoint shapes.</p>
+  </header>
+
+  <main class="app-main">
+    <section class="settings">
+      <div class="field">
+        <label for="chartTitle">Title</label>
+        <input type="text" id="chartTitle" value="Project Timeline" />
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="startDate">Start</label>
+          <input type="date" id="startDate" />
+        </div>
+        <div class="field">
+          <label for="endDate">End</label>
+          <input type="date" id="endDate" />
+        </div>
+      </div>
+      <div class="field">
+        <label for="scale">Time axis</label>
+        <select id="scale">
+          <option value="week">Weeks</option>
+          <option value="month" selected>Months</option>
+          <option value="quarter">Quarters</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Labels</label>
+        <div class="check-row">
+          <label class="check"><input type="checkbox" id="optDates" /> Show dates</label>
+          <label class="check"><input type="checkbox" id="optWorkdays" /> Show net workdays (bars)</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="tasks">
+      <div class="tasks-header">
+        <h2>Tasks</h2>
+        <button id="addTask" class="btn btn-secondary" type="button">+ Add task</button>
+      </div>
+      <div id="taskList" class="task-list"></div>
+    </section>
+
+    <section class="links">
+      <div class="tasks-header">
+        <h2>Connections</h2>
+        <button id="addLink" class="btn btn-secondary" type="button">+ Add link</button>
+      </div>
+      <p class="hint">Draw dependency arrows between tasks/milestones (like think-cell).</p>
+      <div id="linkList" class="task-list"></div>
+    </section>
+
+    <section class="preview">
+      <div class="tasks-header">
+        <h2>Interactive preview</h2>
+        <button id="syncSlide" class="btn btn-secondary" type="button" title="Read shape positions back from the slide">⟲ Sync from slide</button>
+      </div>
+      <p class="hint">Drag a bar to move it, drag its edges to resize, drag a milestone to reschedule. Dates update live.</p>
+      <div id="ganttPreview" class="gantt-preview"></div>
+    </section>
+
+    <div class="actions">
+      <button id="insert" class="btn btn-primary" type="button">Insert / Update chart</button>
+      <button id="sample" class="btn btn-ghost" type="button">Load sample</button>
+    </div>
+
+    <p id="status" class="status" role="status"></p>
+  </main>
+
+  <script src="taskpane.js"></script>
+</body>
+</html>

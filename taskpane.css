@@ -1,0 +1,178 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1b1b1f;
+  --muted: #6b6b73;
+  --border: #e2e2e6;
+  --primary: #2b579a;
+  --primary-hover: #1f4278;
+  --accent: #4472c4;
+  --radius: 6px;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
+  font-size: 13px;
+}
+
+.app-header {
+  padding: 16px 16px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.app-main { padding: 12px 16px 24px; }
+
+.field { display: flex; flex-direction: column; margin-bottom: 10px; }
+.field-row { display: flex; gap: 10px; }
+.field-row .field { flex: 1; }
+
+label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+input, select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  background: #fff;
+}
+
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(68, 114, 196, 0.15);
+}
+
+.tasks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 14px 0 8px;
+}
+
+.tasks-header h2 { margin: 0; font-size: 14px; }
+
+.task-list { display: flex; flex-direction: column; gap: 8px; }
+
+.task-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fafafb;
+}
+
+.task-item .task-name { grid-column: 1 / 2; }
+.task-item .task-dates { grid-column: 1 / 2; display: flex; gap: 6px; }
+.task-item .task-dates input { flex: 1; }
+.task-item .task-meta { grid-column: 1 / 2; display: flex; gap: 6px; align-items: center; }
+.task-item .task-meta input[type="number"] { width: 64px; }
+.task-item .task-remove {
+  grid-column: 2 / 3;
+  grid-row: 1 / 4;
+  align-self: start;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+}
+.task-item .task-remove:hover { color: #c62828; }
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn {
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: #eef2f9; color: var(--primary); border-color: #d5deee; }
+.btn-ghost { background: transparent; color: var(--muted); border-color: var(--border); }
+
+.status {
+  margin-top: 12px;
+  font-size: 12px;
+  min-height: 16px;
+}
+.status.error { color: #c62828; }
+.status.success { color: #2e7d32; }
+
+.hint {
+  margin: 2px 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.check-row { display: flex; flex-direction: column; gap: 4px; }
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg);
+  margin: 0;
+}
+.check input { width: auto; }
+
+.link-item .link-row {
+  grid-column: 1 / 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.link-item .link-row select { flex: 1; min-width: 0; }
+.link-arrow { color: var(--muted); font-size: 14px; }
+.link-item .task-meta { grid-column: 1 / 2; }
+.link-item .link-style { flex: 1; }
+
+/* Interactive preview */
+.gantt-preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  overflow-x: auto;
+}
+.gantt-preview svg { display: block; width: 100%; height: auto; touch-action: none; }
+.gp-grid { stroke: #ececed; stroke-width: 1; }
+.gp-axis-label { fill: #6b6b73; font: 9px "Segoe UI", sans-serif; }
+.gp-row-label { fill: #1b1b1f; font: 11px "Segoe UI", sans-serif; }
+.gp-bar { cursor: grab; }
+.gp-bar:active { cursor: grabbing; }
+.gp-handle { cursor: ew-resize; fill: rgba(0,0,0,0.001); }
+.gp-progress { pointer-events: none; }
+.gp-ms { cursor: grab; }
+.gp-link { stroke-width: 1.25; fill: none; }
+.gp-datelbl { fill: #6b6b73; font: 9px "Segoe UI", sans-serif; pointer-events: none; }
+.gp-today { stroke: #c00000; stroke-width: 1; stroke-dasharray: 3 2; }
