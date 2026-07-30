@@ -833,7 +833,7 @@ async function insertGantt() {
       buildPeriods(start, end, finest).forEach((p) => {
         if (p.start <= start) return;
         const x = xFor(p.start);
-        created.push(addVRect(shapes, x, L.plotTop, plotBottom, "#E3E3E6", 0.75));
+        addVLine(shapes, created, x, L.plotTop, plotBottom, "#E3E3E6", { weight: 0.5 });
       });
 
       // ---- Rows (groups + tasks) ----
@@ -871,35 +871,19 @@ async function insertGantt() {
       const today = new Date();
       if (showToday && today >= start && today <= end) {
         const tx = xFor(today);
-        addDashedVLine(shapes, created, tx, L.plotTop - 4, plotBottom + 4, "#C00000", 1.5);
+        addVLine(shapes, created, tx, L.plotTop - 4, plotBottom + 4, "#C00000", { weight: 1.25, dash: true });
         created.push(addText(shapes, "Heute", tx + 2, L.plotTop - 14, 40, 12, { size: 8, color: "#C00000" }));
       }
 
-      // ---- Dependency arrows (routed through white space, one group each) ----
-      const connectorGroups = [];
+      // ---- Dependency arrows (routed through white space) ----
       links.forEach((link) => {
         const a = geom[link.from];
         const b = geom[link.to];
         if (!a || !b) return;
-        const parts = [];
-        drawDependency(shapes, parts, a, b, link.style, link.color);
-        if (parts.length) connectorGroups.push(parts);
+        drawDependency(shapes, created, a, b, link.style, link.color, L.rowH);
       });
 
       await context.sync();
-
-      // Group each connector's segments + tip into a single arrow object.
-      connectorGroups.forEach((parts) => {
-        try {
-          const g = shapes.addGroup(parts);
-          g.name = "GanttLink";
-          created.push(g);
-        } catch (e) {
-          // Grouping unsupported: keep the individual parts in the chart.
-          parts.forEach((p) => created.push(p));
-        }
-      });
-      if (connectorGroups.length) await context.sync();
 
       // ---- Fit + group everything ----
       if (doFit) {
@@ -972,77 +956,67 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
   return { left, right };
 }
 
-// Requirement 1+2: an orthogonal arrow routed entirely through the white space
-// (never diagonal, never cutting through a bar) with a real triangular arrow
-// tip. All parts are pushed into `out`; the caller groups them into ONE object,
-// so it behaves like a single arrow shape.
-function drawDependency(shapes, out, a, b, style, color) {
-  let x1, x2, enterFromLeft;
+// Requirement 1+2: routed dependency arrow through the white space with a
+// clearly visible triangular arrowhead. The line body is drawn as very thin,
+// axis-aligned rectangles (guaranteed horizontal/vertical, never diagonal) and
+// the head is a filled triangle, so it renders as a real arrow on every host.
+function drawDependency(shapes, created, a, b, style, color, rowH) {
+  let sx, tx;
   switch (style) {
-    case "start-start": x1 = a.left; x2 = b.left; enterFromLeft = true; break;
-    case "finish-finish": x1 = a.right; x2 = b.right; enterFromLeft = false; break;
-    default: x1 = a.right; x2 = b.left; enterFromLeft = true; break; // finish-start
+    case "start-start": sx = a.left; tx = b.left; break;
+    case "finish-finish": sx = a.right; tx = b.right; break;
+    default: sx = a.right; tx = b.left; break; // finish-start
   }
-  const y1 = a.mid, y2 = b.mid;
-  const pts = routePoints(x1, y1, x2, y2, enterFromLeft);
+  const sy = a.mid, ty = b.mid;
+  const stub = 12;               // white-space offset next to the source
+  const head = 8;                // arrowhead length
 
-  // Draw each straight segment as a thin rectangle (guaranteed axis-aligned).
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [ax, ay] = pts[i];
-    const [bx, by] = pts[i + 1];
-    if (Math.abs(ax - bx) < 0.5 && Math.abs(ay - by) < 0.5) continue;
-    if (Math.abs(ay - by) < 0.5) hSeg(shapes, out, ax, bx, ay, color);
-    else vSeg(shapes, out, ax, ay, by, color);
+  if (tx >= sx) {
+    // Normal case: successor starts at/after predecessor end.
+    // exit right -> drop to target row -> approach target's left edge from left
+    const chX = Math.max(sx + stub, tx - stub);
+    hRect(shapes, created, sx, chX, sy, color);
+    vRect(shapes, created, chX, sy, ty, color);
+    hRect(shapes, created, chX, tx - head, ty, color);
+    arrowTri(shapes, created, tx, ty, "right", head, color);
+  } else {
+    // Overlap / backward: route the vertical channel to the LEFT of the target
+    // so the arrow still enters the left edge cleanly without cutting the bar.
+    const chX = tx - stub;
+    hRect(shapes, created, sx, chX, sy, color);
+    vRect(shapes, created, chX, sy, ty, color);
+    hRect(shapes, created, chX, tx - head, ty, color);
+    arrowTri(shapes, created, tx, ty, "right", head, color);
   }
-
-  // Arrow tip at the final point, pointing along the last segment.
-  const last = pts[pts.length - 1];
-  const prev = pts[pts.length - 2];
-  arrowHead(shapes, out, last[0], last[1], last[0] >= prev[0] ? "right" : "left", color);
 }
 
-// Orthogonal routing that leaves the source sideways, travels through the row
-// gap (white space) and approaches the target from the chosen side.
-function routePoints(x1, y1, x2, y2, enterFromLeft) {
-  const stub = 8;
-  const yGap = (y1 + y2) / 2;                 // lies on a row boundary = white
-  const leaveX = enterFromLeft ? x1 + stub : x1 - stub;
-  const approachX = enterFromLeft ? x2 - stub : x2 + stub;
-  return [
-    [x1, y1],
-    [leaveX, y1],
-    [leaveX, yGap],
-    [approachX, yGap],
-    [approachX, y2],
-    [x2, y2]
-  ];
-}
-
-function hSeg(shapes, out, xa, xb, y, color) {
-  const t = 1.5;
+// Thin horizontal line segment.
+function hRect(shapes, created, xa, xb, y, color) {
+  const t = 1.4;
   const left = Math.min(xa, xb);
   const w = Math.abs(xb - xa);
-  if (w < 0.5) return;
+  if (w < 0.4) return;
   const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
     { left, top: y - t / 2, width: w, height: t });
   r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
-  out.push(r);
+  created.push(r);
 }
 
-function vSeg(shapes, out, x, ya, yb, color) {
-  const t = 1.5;
+// Thin vertical line segment.
+function vRect(shapes, created, x, ya, yb, color) {
+  const t = 1.4;
   const top = Math.min(ya, yb);
   const h = Math.abs(yb - ya);
-  if (h < 0.5) return;
+  if (h < 0.4) return;
   const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
     { left: x - t / 2, top, width: t, height: h });
   r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
-  out.push(r);
+  created.push(r);
 }
 
-// A proper triangular arrowhead pointing along the travel direction.
-function arrowHead(shapes, out, x, y, dir, color) {
-  const size = 8;
+// Filled triangular arrowhead pointing left/right (uses the native isosceles
+// "triangle" auto-shape which points up, rotated 90°/270° to face travel dir).
+function arrowTri(shapes, created, x, y, dir, size, color) {
   const left = dir === "right" ? x - size : x;
   const tri = shapes.addGeometricShape(PowerPoint.GeometricShapeType.triangle,
     { left, top: y - size / 2, width: size, height: size });
@@ -1050,8 +1024,9 @@ function arrowHead(shapes, out, x, y, dir, color) {
   tri.lineFormat.visible = false;
   tri.name = "GanttLink";
   try { tri.rotation = dir === "right" ? 90 : 270; } catch (e) { /* rotation unsupported */ }
-  out.push(tri);
+  created.push(tri);
 }
+
 
 // ===========================================================================
 // PowerPoint shape helpers
@@ -1081,34 +1056,35 @@ function addText(shapes, text, left, top, width, height, opts = {}) {
   return box;
 }
 
-// Guaranteed-vertical line via a thin rectangle (addLine renders diagonally
-// for zero-width bounding boxes, so we avoid it entirely here).
-function addVRect(shapes, x, y1, y2, color, weight) {
-  const t = weight || 1;
-  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
-    { left: x - t / 2, top: Math.min(y1, y2), width: t, height: Math.abs(y2 - y1) });
-  r.fill.setSolidColor(color);
-  r.lineFormat.visible = false;
-  r.name = "GanttGrid";
-  return r;
-}
+// Guaranteed-vertical line drawn as a thin rectangle (an addLine connector
+// renders diagonally across its bounding box on some hosts, so we avoid it).
+// For a dashed look (today marker) we stack short rectangles vertically.
+// All created shapes are pushed into `created` so they get grouped/cleaned up.
+function addVLine(shapes, created, x, y1, y2, color, opts = {}) {
+  const t = opts.weight || 0.75;
+  const top = Math.min(y1, y2);
+  const total = Math.abs(y2 - y1);
 
-// Dashed vertical line built from short vertical rectangles (kept vertical).
-function addDashedVLine(shapes, created, x, y1, y2, color, weight) {
-  const t = weight || 1.25;
-  const dash = 5, gap = 3;
-  let y = Math.min(y1, y2);
-  const end = Math.max(y1, y2);
-  while (y < end) {
-    const h = Math.min(dash, end - y);
-    const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
-      { left: x - t / 2, top: y, width: t, height: h });
-    r.fill.setSolidColor(color);
-    r.lineFormat.visible = false;
-    r.name = "GanttGrid";
-    created.push(r);
-    y += dash + gap;
+  if (opts.dash) {
+    const dash = 5, gap = 3;
+    let yy = top;
+    while (yy < top + total) {
+      const h = Math.min(dash, top + total - yy);
+      const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+        { left: x - t / 2, top: yy, width: t, height: h });
+      r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttGrid";
+      created.push(r);
+      yy += dash + gap;
+    }
+    return;
   }
+
+  const rect = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+    { left: x - t / 2, top, width: t, height: total });
+  rect.fill.setSolidColor(color);
+  rect.lineFormat.visible = false;
+  rect.name = "GanttGrid";
+  created.push(rect);
 }
 
 // ===========================================================================
@@ -1275,15 +1251,17 @@ function renderPreview() {
   readLinks().forEach((lk) => {
     const a = geom[lk.from]; const b = geom[lk.to];
     if (!a || !b) return;
-    let ax, bx, enterFromLeft;
+    let ax, bx;
     switch (lk.style) {
-      case "start-start": ax = a.left; bx = b.left; enterFromLeft = true; break;
-      case "finish-finish": ax = a.right; bx = b.right; enterFromLeft = false; break;
-      default: ax = a.right; bx = b.left; enterFromLeft = true; break;
+      case "start-start": ax = a.left; bx = b.left; break;
+      case "finish-finish": ax = a.right; bx = b.right; break;
+      default: ax = a.right; bx = b.left; break;
     }
     const ay = a.mid, by = b.mid;
-    const pts = routePoints(ax, ay, bx, by, enterFromLeft);
-    const d = "M " + pts.map((q) => `${q[0]} ${q[1]}`).join(" L ");
+    const channelX = ax + 12;
+    const enterX = bx - 12;
+    const midX = enterX > channelX ? enterX : bx;
+    const d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${by} L ${midX} ${by} L ${bx} ${by}`;
     const p = document.createElementNS(SVGNS, "path");
     p.setAttribute("d", d); p.setAttribute("class", "gp-link");
     p.setAttribute("stroke", lk.color); p.setAttribute("marker-end", "url(#gp-arrow)");
