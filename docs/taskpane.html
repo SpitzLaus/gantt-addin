@@ -991,17 +991,22 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
   arrowTri(shapes, created, tx, ty, headDir, head, color);
 }
 
-// Filled triangular arrowhead. The native "triangle" auto-shape points UP.
-// To point RIGHT we rotate 90° (CW); to point LEFT we rotate -90°/270°.
+// Filled arrowhead. Rotation of the "triangle" shape is unreliable on some
+// hosts (silently ignored), so we use the native directional block-arrow
+// shapes (rightArrow / leftArrow) which inherently point the correct way with
+// NO rotation needed. We make it short & squat so only the head is prominent.
 function arrowTri(shapes, created, x, y, dir, size, color) {
-  const left = dir === "right" ? x - size : x;
-  const tri = shapes.addGeometricShape(PowerPoint.GeometricShapeType.triangle,
-    { left, top: y - size / 2, width: size, height: size });
-  tri.fill.setSolidColor(color);
-  tri.lineFormat.visible = false;
-  tri.name = "GanttLink";
-  try { tri.rotation = dir === "right" ? 270 : 90; } catch (e) { /* rotation unsupported */ }
-  created.push(tri);
+  const w = size * 1.4;
+  const left = dir === "right" ? x - w : x;
+  const type = dir === "right"
+    ? PowerPoint.GeometricShapeType.rightArrow
+    : PowerPoint.GeometricShapeType.leftArrow;
+  const arrow = shapes.addGeometricShape(type,
+    { left, top: y - size / 2, width: w, height: size });
+  arrow.fill.setSolidColor(color);
+  arrow.lineFormat.visible = false;
+  arrow.name = "GanttLink";
+  created.push(arrow);
 }
 
 
