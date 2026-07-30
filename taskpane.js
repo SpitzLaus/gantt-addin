@@ -660,17 +660,18 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
 // angles between the two points. Because the Office.js ShapeLineFormat API has
 // NO arrowhead property, the head is drawn as a native triangle at the target.
 function drawDependency(shapes, created, a, b, style, color, rowH) {
-  let sx, tx;
+  let sx, tx, headDir;
   switch (style) {
-    case "start-start": sx = a.left; tx = b.left; break;
-    case "finish-finish": sx = a.right; tx = b.right; break;
-    default: sx = a.right; tx = b.left; break; // finish-start
+    // headDir = the direction the arrowhead must point so its tip enters the
+    // target bar's edge (pointing INTO the bar, not away from it).
+    case "start-start":   sx = a.left;  tx = b.left;  headDir = "right"; break;
+    case "finish-finish": sx = a.right; tx = b.right; headDir = "left";  break;
+    default:              sx = a.right; tx = b.left;  headDir = "right"; break; // finish-start
   }
   const sy = a.mid, ty = b.mid;
   const head = 8;                       // arrowhead length
-  const dir = tx >= sx ? "right" : "left";
-  // Stop the connector a little before the target so the triangle tip lands on it.
-  const endX = dir === "right" ? tx - head : tx + head;
+  // End the connector at the arrowhead's base so the tip sits on the edge.
+  const endX = headDir === "right" ? tx - head : tx + head;
 
   // Native elbow connector for the routed body.
   const conn = shapes.addLine(PowerPoint.ConnectorType.elbow, {
@@ -681,8 +682,8 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
   conn.name = "GanttLink";
   created.push(conn);
 
-  // Native triangular arrowhead at the target, facing the travel direction.
-  arrowTri(shapes, created, tx, ty, dir, head, color);
+  // Native triangular arrowhead at the target, pointing INTO the target bar.
+  arrowTri(shapes, created, tx, ty, headDir, head, color);
 }
 
 // Filled triangular arrowhead pointing left/right (uses the native isosceles
