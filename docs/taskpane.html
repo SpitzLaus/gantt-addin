@@ -959,14 +959,13 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
   return { left, right };
 }
 
-// Requirement 1+2: dependency arrow drawn as ONE genuine native PowerPoint
-// block-arrow auto-shape (GeometricShapeType.rightArrow). Because PowerPoint's
-// connector/LineFormat API exposes no arrowhead properties, a real arrowhead
-// can only be obtained from a native arrow shape. We take a single rightArrow,
-// size its width to the source→target distance and rotate it to point exactly
-// at the target, so the arrowhead (the shape's built-in point) lands on the
-// successor. This is a real arrow with a real point — not assembled from
-// separate rectangles and triangles.
+// Requirement 1+2: dependency drawn as ONE genuine native PowerPoint arrow
+// auto-shape with a real, built-in arrowhead — never assembled from separate
+// rectangles/triangles. Because PowerPoint's connector/LineFormat API exposes
+// no arrowhead properties, a real arrowhead can only come from a native arrow
+// shape. For an elbow (right-angle) route we use GeometricShapeType.bentArrow,
+// a single L-shaped arrow object; for same-row dependencies (no vertical
+// offset) an elbow is meaningless, so we fall back to a straight rightArrow.
 function drawDependency(shapes, created, a, b, style, color, rowH) {
   let sx, tx;
   switch (style) {
@@ -975,24 +974,44 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
     default: sx = a.right; tx = b.left; break; // finish-start
   }
   const sy = a.mid, ty = b.mid;
-
   const dx = tx - sx, dy = ty - sy;
-  const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 6);
   const thick = 6;                       // arrow shaft thickness in points
-  const cx = (sx + tx) / 2, cy = (sy + ty) / 2;
 
-  // Place the arrow's (unrotated) bounding box centred on the S→T midpoint,
-  // pointing right by default, then rotate around that centre to aim at T.
-  const arrow = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rightArrow, {
-    left: cx - dist / 2,
-    top: cy - thick / 2,
-    width: dist,
-    height: thick,
+  // Same-row (or almost): a plain straight horizontal arrow with a real head.
+  if (Math.abs(dy) < thick) {
+    const w = Math.max(Math.abs(dx), 10);
+    const arrow = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rightArrow, {
+      left: Math.min(sx, tx), top: sy - thick / 2, width: w, height: thick,
+    });
+    arrow.fill.setSolidColor(color);
+    arrow.lineFormat.visible = false;
+    arrow.name = "GanttLink";
+    try { arrow.flipHorizontal = tx < sx; } catch (e) { /* flip unsupported */ }
+    created.push(arrow);
+    return;
+  }
+
+  // Elbow route: single native bent arrow spanning the S→T bounding box.
+  // The default bentArrow travels right, then bends and points UP with its
+  // head at the top. We flip it so the shaft leaves the source and the head
+  // enters the target, whatever their relative positions.
+  const left = Math.min(sx, tx);
+  const top = Math.min(sy, ty);
+  const w = Math.max(Math.abs(dx), 12);
+  const h = Math.max(Math.abs(dy), 12);
+  const arrow = shapes.addGeometricShape(PowerPoint.GeometricShapeType.bentArrow, {
+    left, top, width: w, height: h,
   });
   arrow.fill.setSolidColor(color);
   arrow.lineFormat.visible = false;
   arrow.name = "GanttLink";
-  try { arrow.rotation = Math.atan2(dy, dx) * 180 / Math.PI; } catch (e) { /* rotation unsupported */ }
+  try {
+    // bentArrow points upward by default: head at top, tail entering from the
+    // bottom-left. Flip vertically when the target is BELOW the source so the
+    // head points down; flip horizontally when the target is to the LEFT.
+    arrow.flipVertical = ty > sy;
+    arrow.flipHorizontal = tx < sx;
+  } catch (e) { /* flip unsupported on this host */ }
   created.push(arrow);
 }
 
