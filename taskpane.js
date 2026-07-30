@@ -654,7 +654,8 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
   return { left, right };
 }
 
-// Requirement 1+2: real routed arrow through white space, not through bars.
+// Requirement 1+2: ONE real connector shape (elbow) with a native arrowhead,
+// routed at right angles through the white space between the two elements.
 function drawDependency(shapes, created, a, b, style, color, rowH) {
   let x1, x2;
   switch (style) {
@@ -663,55 +664,37 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
     default: x1 = a.right; x2 = b.left; break; // finish-start
   }
   const y1 = a.mid, y2 = b.mid;
-  const gap = 12;
-  // vertical channel sits in white space just right of the source element
-  const channelX = x1 + gap;
-  const enterX = x2 - gap;
 
-  hSeg(shapes, created, x1, channelX, y1, color);
-  vSeg(shapes, created, channelX, y1, y2, color);
-  if (enterX > channelX) {
-    hSeg(shapes, created, channelX, enterX, y2, color);
-    arrowHead(shapes, created, x2, y2, x2 >= enterX ? "right" : "left", color);
-  } else {
-    hSeg(shapes, created, channelX, x2, y2, color);
-    arrowHead(shapes, created, x2, y2, "left", color);
+  // A single elbow connector = one shape that bends at 90° (never diagonal,
+  // never cutting through a bar) and carries a proper triangular arrowhead.
+  const line = shapes.addLine(PowerPoint.ConnectorType.elbow, {
+    left: Math.min(x1, x2),
+    top: Math.min(y1, y2),
+    width: Math.max(1, Math.abs(x2 - x1)),
+    height: Math.max(1, Math.abs(y2 - y1))
+  });
+
+  const lf = line.lineFormat;
+  lf.color = color;
+  lf.weight = 1.5;
+
+  // Native arrowhead so it renders as a real arrow, not a separate triangle.
+  // The connector's "end" corner is bottom-right of its bounding box; put the
+  // arrowhead on whichever end represents the target element.
+  const targetIsEndCorner = (x2 >= x1) === (y2 >= y1);
+  try {
+    lf.beginArrowheadStyle = PowerPoint.ArrowheadStyle.none;
+    lf.endArrowheadStyle = PowerPoint.ArrowheadStyle.none;
+    const head = targetIsEndCorner ? "end" : "begin";
+    lf[`${head}ArrowheadStyle`] = PowerPoint.ArrowheadStyle.triangle;
+    lf[`${head}ArrowheadLength`] = PowerPoint.ArrowheadLength.medium;
+    lf[`${head}ArrowheadWidth`] = PowerPoint.ArrowheadWidth.medium;
+  } catch (e) {
+    // Older hosts without arrowhead support: at least a clean single elbow line.
   }
-}
 
-function hSeg(shapes, created, xa, xb, y, color) {
-  const t = 1.4;
-  const left = Math.min(xa, xb);
-  const w = Math.abs(xb - xa);
-  if (w < 0.5) return;
-  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
-    { left, top: y - t / 2, width: w, height: t });
-  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
-  created.push(r);
-}
-
-function vSeg(shapes, created, x, ya, yb, color) {
-  const t = 1.4;
-  const top = Math.min(ya, yb);
-  const h = Math.abs(yb - ya);
-  if (h < 0.5) return;
-  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
-    { left: x - t / 2, top, width: t, height: h });
-  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
-  created.push(r);
-}
-
-// A proper triangular arrowhead (isosceles triangle) pointing along travel dir.
-function arrowHead(shapes, created, x, y, dir, color) {
-  const size = 7;
-  const left = dir === "right" ? x - size : x;
-  const tri = shapes.addGeometricShape(PowerPoint.GeometricShapeType.triangle,
-    { left, top: y - size / 2, width: size, height: size });
-  tri.fill.setSolidColor(color);
-  tri.lineFormat.visible = false;
-  tri.name = "GanttLink";
-  try { tri.rotation = dir === "right" ? 90 : 270; } catch (e) { /* rotation unsupported */ }
-  created.push(tri);
+  line.name = "GanttLink";
+  created.push(line);
 }
 
 // ===========================================================================
