@@ -959,50 +959,39 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
   return { left, right };
 }
 
-// Requirement 1+2: dependency drawn as a self-routed right-angle (elbow) arrow
-// with a real arrowhead. We control the exact orthogonal path ourselves using
-// thin axis-aligned rectangles (guaranteed horizontal/vertical, never diagonal)
-// and finish with a native block-arrow head, so the line and its head always
-// line up — unlike the auto-routed native connector, which places its bends
-// independently of where we can put the head.
+// Requirement 1+2: original routed dependency arrow. The vertical channel sits
+// in the white space just right of the source; the line body is drawn as thin
+// axis-aligned rectangles and the head is a rotated triangle at the target.
 function drawDependency(shapes, created, a, b, style, color, rowH) {
-  let sx, tx, headDir;
+  let x1, x2;
   switch (style) {
-    // headDir = the direction the arrowhead must point so its tip enters the
-    // target bar's edge (pointing INTO the bar, not away from it).
-    case "start-start":   sx = a.left;  tx = b.left;  headDir = "right"; break;
-    case "finish-finish": sx = a.right; tx = b.right; headDir = "left";  break;
-    default:              sx = a.right; tx = b.left;  headDir = "right"; break; // finish-start
+    case "start-start": x1 = a.left; x2 = b.left; break;
+    case "finish-finish": x1 = a.right; x2 = b.right; break;
+    default: x1 = a.right; x2 = b.left; break; // finish-start
   }
-  const sy = a.mid, ty = b.mid;
-  const head = 8;                       // arrowhead length
-  const stub = 14;                      // horizontal stub length into whitespace
+  const y1 = a.mid, y2 = b.mid;
+  const gap = 12;
+  // vertical channel sits in white space just right of the source element
+  const channelX = x1 + gap;
+  const enterX = x2 - gap;
 
-  // The arrowhead tip sits exactly on the target edge (tx). Its base (where the
-  // routed line must arrive) is `head` points away, on the approach side.
-  const baseX = headDir === "right" ? tx - head : tx + head;
-
-  // Route: exit the source horizontally by `stub`, drop/rise to the target row,
-  // then run horizontally to the arrowhead base. Choose the vertical channel so
-  // the final horizontal segment enters the head from the correct side.
-  const chX = headDir === "right"
-    ? Math.max(sx + stub, baseX - stub)      // channel left of the head
-    : Math.min(sx - stub, baseX + stub);     // channel right of the head
-
-  hSeg(shapes, created, sx, chX, sy, color);   // exit stub (+ maybe more)
-  vSeg(shapes, created, chX, sy, ty, color);   // vertical channel
-  hSeg(shapes, created, chX, baseX, ty, color); // approach to arrowhead base
-
-  // Native block-arrow head, pointing INTO the target bar (no rotation needed).
-  arrowTri(shapes, created, tx, ty, headDir, head, color);
+  hSeg(shapes, created, x1, channelX, y1, color);
+  vSeg(shapes, created, channelX, y1, y2, color);
+  if (enterX > channelX) {
+    hSeg(shapes, created, channelX, enterX, y2, color);
+    arrowHead(shapes, created, x2, y2, x2 >= enterX ? "right" : "left", color);
+  } else {
+    hSeg(shapes, created, channelX, x2, y2, color);
+    arrowHead(shapes, created, x2, y2, "left", color);
+  }
 }
 
 // Thin horizontal line segment (a filled rectangle — always perfectly level).
 function hSeg(shapes, created, xa, xb, y, color) {
-  const t = 1.6;
+  const t = 1.4;
   const left = Math.min(xa, xb);
   const w = Math.abs(xb - xa);
-  if (w < 0.4) return;
+  if (w < 0.5) return;
   const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
     { left, top: y - t / 2, width: w, height: t });
   r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
@@ -1011,32 +1000,27 @@ function hSeg(shapes, created, xa, xb, y, color) {
 
 // Thin vertical line segment (a filled rectangle — always perfectly plumb).
 function vSeg(shapes, created, x, ya, yb, color) {
-  const t = 1.6;
+  const t = 1.4;
   const top = Math.min(ya, yb);
   const h = Math.abs(yb - ya);
-  if (h < 0.4) return;
+  if (h < 0.5) return;
   const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
     { left: x - t / 2, top, width: t, height: h });
   r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
   created.push(r);
 }
 
-// Filled arrowhead. Rotation of the "triangle" shape is unreliable on some
-// hosts (silently ignored), so we use the native directional block-arrow
-// shapes (rightArrow / leftArrow) which inherently point the correct way with
-// NO rotation needed. We make it short & squat so only the head is prominent.
-function arrowTri(shapes, created, x, y, dir, size, color) {
-  const w = size * 1.4;
-  const left = dir === "right" ? x - w : x;
-  const type = dir === "right"
-    ? PowerPoint.GeometricShapeType.rightArrow
-    : PowerPoint.GeometricShapeType.leftArrow;
-  const arrow = shapes.addGeometricShape(type,
-    { left, top: y - size / 2, width: w, height: size });
-  arrow.fill.setSolidColor(color);
-  arrow.lineFormat.visible = false;
-  arrow.name = "GanttLink";
-  created.push(arrow);
+// Triangular arrowhead (rotated to face travel direction).
+function arrowHead(shapes, created, x, y, dir, color) {
+  const size = 7;
+  const left = dir === "right" ? x - size : x;
+  const tri = shapes.addGeometricShape(PowerPoint.GeometricShapeType.triangle,
+    { left, top: y - size / 2, width: size, height: size });
+  tri.fill.setSolidColor(color);
+  tri.lineFormat.visible = false;
+  tri.name = "GanttLink";
+  try { tri.rotation = dir === "right" ? 90 : 270; } catch (e) { /* rotation unsupported */ }
+  created.push(tri);
 }
 
 
