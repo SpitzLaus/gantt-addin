@@ -959,13 +959,10 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
   return { left, right };
 }
 
-// Requirement 1+2: dependency drawn as ONE genuine native PowerPoint arrow
-// auto-shape with a real, built-in arrowhead — never assembled from separate
-// rectangles/triangles. Because PowerPoint's connector/LineFormat API exposes
-// no arrowhead properties, a real arrowhead can only come from a native arrow
-// shape. For an elbow (right-angle) route we use GeometricShapeType.bentArrow,
-// a single L-shaped arrow object; for same-row dependencies (no vertical
-// offset) an elbow is meaningless, so we fall back to a straight rightArrow.
+// Requirement 1+2: routed dependency arrow through the white space with a
+// clearly visible triangular arrowhead. The line body is drawn as very thin,
+// axis-aligned rectangles (guaranteed horizontal/vertical, never diagonal) and
+// the head is a filled triangle, so it renders as a real arrow on every host.
 function drawDependency(shapes, created, a, b, style, color, rowH) {
   let sx, tx;
   switch (style) {
@@ -974,45 +971,63 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
     default: sx = a.right; tx = b.left; break; // finish-start
   }
   const sy = a.mid, ty = b.mid;
-  const dx = tx - sx, dy = ty - sy;
-  const thick = 6;                       // arrow shaft thickness in points
+  const stub = 12;               // white-space offset next to the source
+  const head = 8;                // arrowhead length
 
-  // Same-row (or almost): a plain straight horizontal arrow with a real head.
-  if (Math.abs(dy) < thick) {
-    const w = Math.max(Math.abs(dx), 10);
-    const arrow = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rightArrow, {
-      left: Math.min(sx, tx), top: sy - thick / 2, width: w, height: thick,
-    });
-    arrow.fill.setSolidColor(color);
-    arrow.lineFormat.visible = false;
-    arrow.name = "GanttLink";
-    try { arrow.flipHorizontal = tx < sx; } catch (e) { /* flip unsupported */ }
-    created.push(arrow);
-    return;
+  if (tx >= sx) {
+    // Normal case: successor starts at/after predecessor end.
+    // exit right -> drop to target row -> approach target's left edge from left
+    const chX = Math.max(sx + stub, tx - stub);
+    hRect(shapes, created, sx, chX, sy, color);
+    vRect(shapes, created, chX, sy, ty, color);
+    hRect(shapes, created, chX, tx - head, ty, color);
+    arrowTri(shapes, created, tx, ty, "right", head, color);
+  } else {
+    // Overlap / backward: route the vertical channel to the LEFT of the target
+    // so the arrow still enters the left edge cleanly without cutting the bar.
+    const chX = tx - stub;
+    hRect(shapes, created, sx, chX, sy, color);
+    vRect(shapes, created, chX, sy, ty, color);
+    hRect(shapes, created, chX, tx - head, ty, color);
+    arrowTri(shapes, created, tx, ty, "right", head, color);
   }
+}
 
-  // Elbow route: single native bent arrow spanning the S→T bounding box.
-  // The default bentArrow travels right, then bends and points UP with its
-  // head at the top. We flip it so the shaft leaves the source and the head
-  // enters the target, whatever their relative positions.
-  const left = Math.min(sx, tx);
-  const top = Math.min(sy, ty);
-  const w = Math.max(Math.abs(dx), 12);
-  const h = Math.max(Math.abs(dy), 12);
-  const arrow = shapes.addGeometricShape(PowerPoint.GeometricShapeType.bentArrow, {
-    left, top, width: w, height: h,
-  });
-  arrow.fill.setSolidColor(color);
-  arrow.lineFormat.visible = false;
-  arrow.name = "GanttLink";
-  try {
-    // bentArrow points upward by default: head at top, tail entering from the
-    // bottom-left. Flip vertically when the target is BELOW the source so the
-    // head points down; flip horizontally when the target is to the LEFT.
-    arrow.flipVertical = ty > sy;
-    arrow.flipHorizontal = tx < sx;
-  } catch (e) { /* flip unsupported on this host */ }
-  created.push(arrow);
+// Thin horizontal line segment.
+function hRect(shapes, created, xa, xb, y, color) {
+  const t = 1.4;
+  const left = Math.min(xa, xb);
+  const w = Math.abs(xb - xa);
+  if (w < 0.4) return;
+  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+    { left, top: y - t / 2, width: w, height: t });
+  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
+  created.push(r);
+}
+
+// Thin vertical line segment.
+function vRect(shapes, created, x, ya, yb, color) {
+  const t = 1.4;
+  const top = Math.min(ya, yb);
+  const h = Math.abs(yb - ya);
+  if (h < 0.4) return;
+  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+    { left: x - t / 2, top, width: t, height: h });
+  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
+  created.push(r);
+}
+
+// Filled triangular arrowhead pointing left/right (uses the native isosceles
+// "triangle" auto-shape which points up, rotated 90°/270° to face travel dir).
+function arrowTri(shapes, created, x, y, dir, size, color) {
+  const left = dir === "right" ? x - size : x;
+  const tri = shapes.addGeometricShape(PowerPoint.GeometricShapeType.triangle,
+    { left, top: y - size / 2, width: size, height: size });
+  tri.fill.setSolidColor(color);
+  tri.lineFormat.visible = false;
+  tri.name = "GanttLink";
+  try { tri.rotation = dir === "right" ? 90 : 270; } catch (e) { /* rotation unsupported */ }
+  created.push(tri);
 }
 
 
