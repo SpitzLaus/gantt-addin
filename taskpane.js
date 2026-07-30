@@ -686,8 +686,8 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
   arrowTri(shapes, created, tx, ty, headDir, head, color);
 }
 
-// Filled triangular arrowhead pointing left/right (uses the native isosceles
-// "triangle" auto-shape which points up, rotated 90°/270° to face travel dir).
+// Filled triangular arrowhead. The native "triangle" auto-shape points UP.
+// To point RIGHT we rotate 90° (CW); to point LEFT we rotate -90°/270°.
 function arrowTri(shapes, created, x, y, dir, size, color) {
   const left = dir === "right" ? x - size : x;
   const tri = shapes.addGeometricShape(PowerPoint.GeometricShapeType.triangle,
@@ -695,7 +695,7 @@ function arrowTri(shapes, created, x, y, dir, size, color) {
   tri.fill.setSolidColor(color);
   tri.lineFormat.visible = false;
   tri.name = "GanttLink";
-  try { tri.rotation = dir === "right" ? 90 : 270; } catch (e) { /* rotation unsupported */ }
+  try { tri.rotation = dir === "right" ? 270 : 90; } catch (e) { /* rotation unsupported */ }
   created.push(tri);
 }
 
