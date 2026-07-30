@@ -654,10 +654,11 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
   return { left, right };
 }
 
-// Requirement 1+2: routed dependency arrow through the white space with a
-// clearly visible triangular arrowhead. The line body is drawn as very thin,
-// axis-aligned rectangles (guaranteed horizontal/vertical, never diagonal) and
-// the head is a filled triangle, so it renders as a real arrow on every host.
+// Requirement 1+2: dependency drawn like PowerPoint's "Verbinder: gewinkelt
+// mit Pfeil" (elbow connector with arrowhead). The elbow BODY is a genuine
+// native connector (ConnectorType.elbow) — PowerPoint auto-routes it at right
+// angles between the two points. Because the Office.js ShapeLineFormat API has
+// NO arrowhead property, the head is drawn as a native triangle at the target.
 function drawDependency(shapes, created, a, b, style, color, rowH) {
   let sx, tx;
   switch (style) {
@@ -666,50 +667,22 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
     default: sx = a.right; tx = b.left; break; // finish-start
   }
   const sy = a.mid, ty = b.mid;
-  const stub = 12;               // white-space offset next to the source
-  const head = 8;                // arrowhead length
+  const head = 8;                       // arrowhead length
+  const dir = tx >= sx ? "right" : "left";
+  // Stop the connector a little before the target so the triangle tip lands on it.
+  const endX = dir === "right" ? tx - head : tx + head;
 
-  if (tx >= sx) {
-    // Normal case: successor starts at/after predecessor end.
-    // exit right -> drop to target row -> approach target's left edge from left
-    const chX = Math.max(sx + stub, tx - stub);
-    hRect(shapes, created, sx, chX, sy, color);
-    vRect(shapes, created, chX, sy, ty, color);
-    hRect(shapes, created, chX, tx - head, ty, color);
-    arrowTri(shapes, created, tx, ty, "right", head, color);
-  } else {
-    // Overlap / backward: route the vertical channel to the LEFT of the target
-    // so the arrow still enters the left edge cleanly without cutting the bar.
-    const chX = tx - stub;
-    hRect(shapes, created, sx, chX, sy, color);
-    vRect(shapes, created, chX, sy, ty, color);
-    hRect(shapes, created, chX, tx - head, ty, color);
-    arrowTri(shapes, created, tx, ty, "right", head, color);
-  }
-}
+  // Native elbow connector for the routed body.
+  const conn = shapes.addLine(PowerPoint.ConnectorType.elbow, {
+    left: sx, top: sy, width: endX - sx, height: ty - sy,
+  });
+  conn.lineFormat.color = color;
+  conn.lineFormat.weight = 1.5;
+  conn.name = "GanttLink";
+  created.push(conn);
 
-// Thin horizontal line segment.
-function hRect(shapes, created, xa, xb, y, color) {
-  const t = 1.4;
-  const left = Math.min(xa, xb);
-  const w = Math.abs(xb - xa);
-  if (w < 0.4) return;
-  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
-    { left, top: y - t / 2, width: w, height: t });
-  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
-  created.push(r);
-}
-
-// Thin vertical line segment.
-function vRect(shapes, created, x, ya, yb, color) {
-  const t = 1.4;
-  const top = Math.min(ya, yb);
-  const h = Math.abs(yb - ya);
-  if (h < 0.4) return;
-  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
-    { left: x - t / 2, top, width: t, height: h });
-  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
-  created.push(r);
+  // Native triangular arrowhead at the target, facing the travel direction.
+  arrowTri(shapes, created, tx, ty, dir, head, color);
 }
 
 // Filled triangular arrowhead pointing left/right (uses the native isosceles
