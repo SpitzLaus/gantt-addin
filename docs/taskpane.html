@@ -852,13 +852,13 @@ async function insertGantt() {
           g.lineFormat.visible = false;
           g.name = "GanttGroup";
           created.push(g);
-          created.push(addText(shapes, row.name, MARGIN.left + 6, rowTop, LABEL_WIDTH + 200, L.rowH,
+          created.push(addText(shapes, row.name, MARGIN.left, rowTop, LABEL_WIDTH + 200, L.rowH,
             { size: 11, bold: true, color: "#1b1b1f", valign: "middle" }));
           return;
         }
 
-        // Task label
-        created.push(addText(shapes, row.name, MARGIN.left, rowTop, LABEL_WIDTH - 8, L.rowH,
+        // Task label (indented to the right, below the group heading)
+        created.push(addText(shapes, row.name, MARGIN.left + 18, rowTop, LABEL_WIDTH - 26, L.rowH,
           { size: 11, color: "#1b1b1f", valign: "middle" }));
 
         let taskLeft = Infinity, taskRight = -Infinity;
@@ -875,7 +875,7 @@ async function insertGantt() {
       if (showToday && today >= start && today <= end) {
         const tx = xFor(today);
         addVLine(shapes, created, tx, L.plotTop - 4, plotBottom + 4, "#C00000", { weight: 1.25, dash: true });
-        created.push(addText(shapes, "Heute", tx + 2, L.plotTop - 14, 40, 12, { size: 8, color: "#C00000" }));
+        created.push(addText(shapes, "Heute", tx + 2, plotBottom + 4, 40, 12, { size: 8, color: "#C00000" }));
       }
 
       // ---- Dependency arrows (routed through white space) ----
