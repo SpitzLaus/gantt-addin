@@ -1,0 +1,22 @@
+[x] 1. Connectoren als richtige Pfeile und keine Blöcke
+[x] 2. Connectoren Pfeile Verbindung zu anderem Task über weißbereich und nicht in den Task schneiden
+[x] 3. % von Task brauch ich nicht
+[x] 4. gestrichelte heute markierung im chart einfügen
+[x] 5. Auswahl von mehreren Zeitachsen (z.B. Ansicht Jahre/Monate)
+[x] 6. mehrere Tasks sollen in einer ÜBerschrift zusammengefasst werden
+[x] 7. intiales datum bei taskanlage; Start=heute, Ende=+1 WOche
+[x] 8. task Reihenfolge im char builder verschiebbar gestalten
+[x] 9. taskname muss eindeutig und nicht doppelt verwendet werden
+[x] 10. Eine task kann mehrere bars bzw. milesstones haben. Jede Bar/Milestone mit Beschriftungsmöglichkeit und individueller Farbe
+[x] 11. im Chart wird die Datumsabgrenzung in schrägen Linien dargestellt. DIes soll vertikal sein
+[x] 12. im Chartbuilder datum copy paste möglich machen
+[x] 13. Enddatum darf numerisch nicht hinterm startdatum liegen - soll er immer prüfen und bei Nichteinhaltung rot markieren
+[x] 14. chart soll auf foliengröße angepasst werden und alles in einer gruppe zusammenfasst
+[x] 15. jeder Balken/Milestone mit der möglichkeit der Datumsanzeige im Chart. Wie auch net workdays
+
+
+
+
+
+
+

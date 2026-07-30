@@ -3,41 +3,50 @@
 // ---------------------------------------------------------------------------
 // Gantt Chart Builder - task pane logic
 // Renders a Gantt chart as native PowerPoint shapes (editable, ThinkCell-style).
-// Supports: bars, milestones (diamonds) and dependency arrows between elements.
+//
+// Features:
+//  - Tasks with MULTIPLE bars / milestones (segments), each with own label+color
+//  - Group headings that bundle several tasks
+//  - Reorderable rows (up / down)
+//  - Unique task names (duplicate -> red)
+//  - End-before-start validation (red)
+//  - Multiple stacked time axes (years / quarters / months / weeks)
+//  - Vertical grid delimiters (never diagonal)
+//  - Dashed "today" marker
+//  - Real routed dependency arrows through the white space (not through bars)
+//  - Fit to slide size and group everything
+//  - Per segment date display + net workdays
 // ---------------------------------------------------------------------------
 
 const PALETTE = ["#4472C4", "#ED7D31", "#70AD47", "#FFC000", "#5B9BD5", "#A5A5A5", "#264478", "#9E480E"];
 
-// Layout constants (points; slide is ~960x540 pt for 16:9)
-const LAYOUT = {
-  chartLeft: 40,
-  chartTop: 90,
-  chartWidth: 860,
-  labelWidth: 180,
-  rowHeight: 30,
-  rowGap: 6,
-  headerHeight: 24,
-  barHeight: 16,
-  milestoneSize: 16
-};
+// Slide is 960 x 540 pt for a 16:9 deck.
+const SLIDE = { w: 960, h: 540 };
+const MARGIN = { left: 30, right: 30, top: 70, bottom: 30 };
+const LABEL_WIDTH = 175;
+const BAND_HEIGHT = 18;          // height of one time-axis band
+const MIN_ROW_HEIGHT = 22;
+const MAX_ROW_HEIGHT = 40;
 
-let taskCounter = 0;
+let rowCounter = 0;
+let segCounter = 0;
 let linkCounter = 0;
+let dateClipboard = null;        // for copy/paste of dates
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.PowerPoint) {
-    document.getElementById("addTask").onclick = () => { addTaskRow(); refreshLinkOptions(); renderPreview(); };
+    document.getElementById("addTask").onclick = () => { addTaskRow(); afterModelChange(); };
+    document.getElementById("addGroup").onclick = () => { addGroupRow(); afterModelChange(); };
     document.getElementById("addLink").onclick = () => { addLinkRow(); renderPreview(); };
     document.getElementById("insert").onclick = insertGantt;
-    document.getElementById("sample").onclick = () => { loadSample(); renderPreview(); };
+    document.getElementById("sample").onclick = () => { loadSample(); afterModelChange(); };
     document.getElementById("syncSlide").onclick = syncFromSlide;
     document.getElementById("startDate").onchange = renderPreview;
     document.getElementById("endDate").onchange = renderPreview;
-    document.getElementById("scale").onchange = renderPreview;
-    document.getElementById("optDates").onchange = renderPreview;
-    document.getElementById("optWorkdays").onchange = renderPreview;
+    document.querySelectorAll(".scaleOpt, #optDates, #optWorkdays, #optToday, #optFit")
+      .forEach((el) => { el.onchange = renderPreview; });
     initDefaults();
-    renderPreview();
+    afterModelChange();
   }
 });
 
@@ -50,112 +59,255 @@ function initDefaults() {
   loadSample();
 }
 
-function toInputDate(d) {
-  return d.toISOString().slice(0, 10);
+function afterModelChange() {
+  refreshLinkOptions();
+  validateNames();
+  renderPreview();
 }
 
-// --- Task row management ----------------------------------------------------
+function toInputDate(d) {
+  const x = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return x.toISOString().slice(0, 10);
+}
+
+function selectedScales() {
+  const order = ["year", "quarter", "month", "week"]; // coarse -> fine
+  const chosen = Array.from(document.querySelectorAll(".scaleOpt:checked")).map((c) => c.value);
+  const sorted = order.filter((o) => chosen.includes(o));
+  return sorted.length ? sorted : ["month"];
+}
+
+// ===========================================================================
+// Row management (task rows + group rows share one ordered list)
+// ===========================================================================
+
+function addGroupRow(group = {}) {
+  rowCounter += 1;
+  const el = document.createElement("div");
+  el.className = "group-item";
+  el.dataset.id = rowCounter;
+  el.dataset.kind = "group";
+  el.innerHTML = `
+    <div class="reorder"><button class="up" type="button" title="Nach oben">▲</button><button class="down" type="button" title="Nach unten">▼</button></div>
+    <input class="group-name" type="text" placeholder="Überschrift" value="${escapeAttr(group.name || "")}" />
+    <button class="task-remove" type="button" title="Entfernen">&times;</button>`;
+  wireRow(el);
+  el.querySelector(".group-name").oninput = afterModelChange;
+  document.getElementById("taskList").appendChild(el);
+  return el;
+}
 
 function addTaskRow(task = {}) {
-  taskCounter += 1;
-  const id = taskCounter;
-  const wrapper = document.createElement("div");
-  wrapper.className = "task-item";
-  wrapper.dataset.id = id;
-  const type = task.type || "bar";
-  wrapper.innerHTML = `
-    <input class="task-name" type="text" placeholder="Task name" value="${task.name || ""}" />
-    <div class="task-dates">
-      <select class="task-type" title="Type">
-        <option value="bar" ${type === "bar" ? "selected" : ""}>Bar</option>
-        <option value="milestone" ${type === "milestone" ? "selected" : ""}>Milestone</option>
-      </select>
-      <input class="task-start" type="date" value="${task.start || ""}" />
-      <input class="task-end" type="date" value="${task.end || ""}" title="End (bars only)" />
+  rowCounter += 1;
+  const el = document.createElement("div");
+  el.className = "task-item";
+  el.dataset.id = rowCounter;
+  el.dataset.kind = "task";
+  el.innerHTML = `
+    <div class="task-head">
+      <div class="reorder"><button class="up" type="button" title="Nach oben">▲</button><button class="down" type="button" title="Nach unten">▼</button></div>
+      <input class="task-name" type="text" placeholder="Task-Name (eindeutig)" value="${escapeAttr(task.name || "")}" />
+      <button class="task-remove" type="button" title="Entfernen">&times;</button>
     </div>
-    <div class="task-meta">
-      <label style="margin:0">%</label>
-      <input class="task-progress" type="number" min="0" max="100" value="${task.progress ?? 0}" />
-      <input class="task-color" type="color" value="${task.color || PALETTE[(id - 1) % PALETTE.length]}" />
-    </div>
-    <button class="task-remove" type="button" title="Remove">&times;</button>
-  `;
-  const typeSel = wrapper.querySelector(".task-type");
-  const endInput = wrapper.querySelector(".task-end");
-  const progInput = wrapper.querySelector(".task-progress");
+    <div class="segments"></div>
+    <button class="add-segment" type="button">+ Balken / Milestone</button>`;
+  wireRow(el);
+  el.querySelector(".task-name").oninput = afterModelChange;
+  el.querySelector(".add-segment").onclick = () => { addSegment(el); renderPreview(); };
+  document.getElementById("taskList").appendChild(el);
+
+  const segs = task.segments && task.segments.length ? task.segments : [defaultSegment()];
+  segs.forEach((s) => addSegment(el, s));
+  return el;
+}
+
+function wireRow(el) {
+  el.querySelector(".task-remove").onclick = () => { el.remove(); afterModelChange(); };
+  el.querySelector(".up").onclick = () => { moveRow(el, -1); };
+  el.querySelector(".down").onclick = () => { moveRow(el, 1); };
+}
+
+function moveRow(el, dir) {
+  if (dir < 0 && el.previousElementSibling) {
+    el.parentNode.insertBefore(el, el.previousElementSibling);
+  } else if (dir > 0 && el.nextElementSibling) {
+    el.parentNode.insertBefore(el.nextElementSibling, el);
+  }
+  afterModelChange();
+}
+
+function defaultSegment() {
+  // Requirement 7: start = today, end = +1 week
+  const start = new Date();
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return { type: "bar", start: toInputDate(start), end: toInputDate(end), label: "", color: "", showDate: true };
+}
+
+function addSegment(taskEl, seg = {}) {
+  segCounter += 1;
+  const container = taskEl.querySelector(".segments");
+  const idx = container.children.length;
+  const s = { ...defaultSegment(), ...seg };
+  if (!s.color) s.color = PALETTE[(segCounter + idx) % PALETTE.length];
+
+  const row = document.createElement("div");
+  row.className = "segment";
+  row.dataset.id = segCounter;
+  row.innerHTML = `
+    <select class="seg-type" title="Typ">
+      <option value="bar" ${s.type === "bar" ? "selected" : ""}>Balken</option>
+      <option value="milestone" ${s.type === "milestone" ? "selected" : ""}>Milestone</option>
+    </select>
+    <input class="seg-start" type="date" value="${s.start || ""}" title="Start" />
+    <input class="seg-end" type="date" value="${s.end || ""}" title="Ende (nur Balken)" />
+    <input class="seg-label" type="text" placeholder="Beschriftung (optional)" value="${escapeAttr(s.label || "")}" />
+    <div class="seg-tools">
+      <input class="seg-color" type="color" value="${s.color}" title="Farbe" />
+      <label class="seg-date-toggle" title="Datum im Chart anzeigen"><input class="seg-showdate" type="checkbox" ${s.showDate ? "checked" : ""} />📅</label>
+      <button class="icon-btn seg-copy" type="button" title="Datum kopieren">⧉</button>
+      <button class="icon-btn seg-paste" type="button" title="Datum einfügen">⇩</button>
+      <button class="icon-btn seg-remove" type="button" title="Segment entfernen">×</button>
+    </div>`;
+
+  const typeSel = row.querySelector(".seg-type");
+  const startInp = row.querySelector(".seg-start");
+  const endInp = row.querySelector(".seg-end");
   const applyType = () => {
     const isMs = typeSel.value === "milestone";
-    endInput.style.visibility = isMs ? "hidden" : "visible";
-    progInput.disabled = isMs;
+    endInp.style.visibility = isMs ? "hidden" : "visible";
   };
-  typeSel.onchange = () => { applyType(); renderPreview(); };
   applyType();
+  typeSel.onchange = () => { applyType(); validateSegment(row); renderPreview(); };
 
-  wrapper.querySelector(".task-name").oninput = () => { refreshLinkOptions(); renderPreview(); };
-  wrapper.querySelectorAll(".task-start, .task-end, .task-progress, .task-color").forEach((inp) => {
-    inp.oninput = renderPreview;
+  [startInp, endInp].forEach((inp) => {
+    inp.oninput = () => { validateSegment(row); renderPreview(); };
   });
-  wrapper.querySelector(".task-remove").onclick = () => { wrapper.remove(); refreshLinkOptions(); renderPreview(); };
-  document.getElementById("taskList").appendChild(wrapper);
+  row.querySelector(".seg-label").oninput = renderPreview;
+  row.querySelector(".seg-color").oninput = renderPreview;
+  row.querySelector(".seg-showdate").onchange = renderPreview;
+
+  row.querySelector(".seg-copy").onclick = () => {
+    dateClipboard = { start: startInp.value, end: endInp.value };
+    setStatus("Datum kopiert.", "success");
+  };
+  row.querySelector(".seg-paste").onclick = () => {
+    if (!dateClipboard) { setStatus("Zwischenablage leer – erst ⧉ nutzen.", "error"); return; }
+    if (dateClipboard.start) startInp.value = dateClipboard.start;
+    if (dateClipboard.end) endInp.value = dateClipboard.end;
+    validateSegment(row); renderPreview();
+  };
+  row.querySelector(".seg-remove").onclick = () => {
+    if (container.children.length > 1) { row.remove(); renderPreview(); }
+    else setStatus("Eine Task braucht mindestens ein Segment.", "error");
+  };
+
+  container.appendChild(row);
+  validateSegment(row);
 }
 
+// Requirement 13: end must not be numerically before start
+function validateSegment(row) {
+  const type = row.querySelector(".seg-type").value;
+  const startInp = row.querySelector(".seg-start");
+  const endInp = row.querySelector(".seg-end");
+  startInp.classList.remove("invalid");
+  endInp.classList.remove("invalid");
+  if (type === "bar" && startInp.value && endInp.value) {
+    if (new Date(endInp.value) < new Date(startInp.value)) {
+      endInp.classList.add("invalid");
+      return false;
+    }
+  }
+  return true;
+}
+
+// Requirement 9: task names must be unique
+function validateNames() {
+  const inputs = Array.from(document.querySelectorAll(".task-name"));
+  const counts = {};
+  inputs.forEach((i) => {
+    const v = i.value.trim().toLowerCase();
+    if (v) counts[v] = (counts[v] || 0) + 1;
+  });
+  inputs.forEach((i) => {
+    const v = i.value.trim().toLowerCase();
+    i.classList.toggle("invalid", !!v && counts[v] > 1);
+  });
+}
+
+// ===========================================================================
+// Model reading
+// ===========================================================================
+
+// Returns ordered rows: {kind:'group', name} | {kind:'task', name, segments:[...]}
+function readModel() {
+  const rows = [];
+  Array.from(document.getElementById("taskList").children).forEach((el) => {
+    if (el.dataset.kind === "group") {
+      const name = el.querySelector(".group-name").value.trim();
+      rows.push({ kind: "group", name });
+    } else {
+      const name = el.querySelector(".task-name").value.trim();
+      const segments = [];
+      el.querySelectorAll(".segment").forEach((sr) => {
+        const type = sr.querySelector(".seg-type").value;
+        const startV = sr.querySelector(".seg-start").value;
+        const endV = sr.querySelector(".seg-end").value;
+        if (!startV) return;
+        if (type === "bar" && !endV) return;
+        segments.push({
+          type,
+          start: new Date(startV),
+          end: type === "milestone" ? new Date(startV) : new Date(endV),
+          label: sr.querySelector(".seg-label").value.trim(),
+          color: sr.querySelector(".seg-color").value,
+          showDate: sr.querySelector(".seg-showdate").checked
+        });
+      });
+      rows.push({ kind: "task", name, segments });
+    }
+  });
+  return rows;
+}
+
+// Tasks that actually have drawable segments.
 function readTasks() {
-  const items = document.querySelectorAll(".task-item:not(.link-item)");
-  const tasks = [];
-  items.forEach((el) => {
-    const name = el.querySelector(".task-name").value.trim();
-    const type = el.querySelector(".task-type").value;
-    const start = el.querySelector(".task-start").value;
-    const end = el.querySelector(".task-end").value;
-    if (!name || !start) return;
-    if (type === "bar" && !end) return;
-    tasks.push({
-      name,
-      type,
-      start: new Date(start),
-      end: type === "milestone" ? new Date(start) : new Date(end),
-      progress: Number(el.querySelector(".task-progress").value) || 0,
-      color: el.querySelector(".task-color").value
-    });
-  });
-  return tasks;
-}
-
-// --- Link (dependency) management ------------------------------------------
-
-function addLinkRow(link = {}) {
-  linkCounter += 1;
-  const id = linkCounter;
-  const wrapper = document.createElement("div");
-  wrapper.className = "task-item link-item";
-  wrapper.dataset.id = id;
-  wrapper.innerHTML = `
-    <div class="link-row">
-      <select class="link-from" title="From"></select>
-      <span class="link-arrow">&rarr;</span>
-      <select class="link-to" title="To"></select>
-    </div>
-    <div class="task-meta">
-      <select class="link-style" title="Line style">
-        <option value="finish-start" selected>Finish &rarr; Start</option>
-        <option value="start-start">Start &rarr; Start</option>
-        <option value="finish-finish">Finish &rarr; Finish</option>
-      </select>
-      <input class="link-color" type="color" value="${link.color || "#c00000"}" />
-    </div>
-    <button class="task-remove" type="button" title="Remove">&times;</button>
-  `;
-  wrapper.querySelector(".task-remove").onclick = () => wrapper.remove();
-  document.getElementById("linkList").appendChild(wrapper);
-  populateLinkSelects(wrapper, link);
-  wrapper.querySelectorAll("select, input").forEach((c) => { c.onchange = renderPreview; });
-  wrapper.querySelector(".task-remove").onclick = () => { wrapper.remove(); renderPreview(); };
+  return readModel().filter((r) => r.kind === "task" && r.segments.length);
 }
 
 function taskNames() {
-  return Array.from(document.querySelectorAll(".task-item:not(.link-item) .task-name"))
-    .map((i) => i.value.trim())
-    .filter(Boolean);
+  return readModel().filter((r) => r.kind === "task" && r.name).map((r) => r.name);
+}
+
+// ===========================================================================
+// Links (dependencies)
+// ===========================================================================
+
+function addLinkRow(link = {}) {
+  linkCounter += 1;
+  const el = document.createElement("div");
+  el.className = "link-item";
+  el.dataset.id = linkCounter;
+  el.innerHTML = `
+    <div class="link-row">
+      <select class="link-from" title="Von"></select>
+      <span class="link-arrow">&rarr;</span>
+      <select class="link-to" title="Nach"></select>
+    </div>
+    <div class="task-meta">
+      <select class="link-style" title="Verbindungsart">
+        <option value="finish-start" selected>Ende &rarr; Start</option>
+        <option value="start-start">Start &rarr; Start</option>
+        <option value="finish-finish">Ende &rarr; Ende</option>
+      </select>
+      <input class="link-color" type="color" value="${link.color || "#c00000"}" />
+    </div>
+    <button class="task-remove" type="button" title="Entfernen">&times;</button>`;
+  document.getElementById("linkList").appendChild(el);
+  populateLinkSelects(el, link);
+  el.querySelectorAll("select, input").forEach((c) => { c.onchange = renderPreview; });
+  el.querySelector(".task-remove").onclick = () => { el.remove(); renderPreview(); };
 }
 
 function populateLinkSelects(wrapper, link = {}) {
@@ -163,7 +315,7 @@ function populateLinkSelects(wrapper, link = {}) {
   ["from", "to"].forEach((role) => {
     const sel = wrapper.querySelector(`.link-${role}`);
     const current = sel.value || link[role];
-    sel.innerHTML = names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+    sel.innerHTML = names.map((n) => `<option value="${escapeAttr(n)}">${escapeHtml(n)}</option>`).join("");
     if (current && names.includes(current)) sel.value = current;
     else if (role === "to" && names.length > 1) sel.selectedIndex = 1;
   });
@@ -180,8 +332,7 @@ function readLinks() {
     const to = el.querySelector(".link-to").value;
     if (!from || !to || from === to) return;
     links.push({
-      from,
-      to,
+      from, to,
       style: el.querySelector(".link-style").value,
       color: el.querySelector(".link-color").value
     });
@@ -189,59 +340,151 @@ function readLinks() {
   return links;
 }
 
+// ===========================================================================
+// Sample data
+// ===========================================================================
+
 function loadSample() {
   document.getElementById("taskList").innerHTML = "";
   document.getElementById("linkList").innerHTML = "";
-  taskCounter = 0;
-  linkCounter = 0;
+  rowCounter = 0; segCounter = 0; linkCounter = 0;
+
   const base = new Date(document.getElementById("startDate").value || new Date());
   const mk = (offset, len) => {
     const s = new Date(base); s.setDate(s.getDate() + offset);
     const e = new Date(s); e.setDate(e.getDate() + len);
     return { start: toInputDate(s), end: toInputDate(e) };
   };
-  [
-    { name: "Concept & requirements", ...mk(0, 20), progress: 100 },
-    { name: "Design", ...mk(15, 30), progress: 70 },
-    { name: "Development", ...mk(40, 45), progress: 30 },
-    { name: "Testing", ...mk(75, 20), progress: 0 },
-    { name: "Go-Live", type: "milestone", ...mk(97, 0) }
-  ].forEach((t, i) => addTaskRow({ ...t, color: PALETTE[i % PALETTE.length] }));
 
-  addLinkRow({ from: "Concept & requirements", to: "Design" });
-  addLinkRow({ from: "Design", to: "Development" });
-  addLinkRow({ from: "Development", to: "Testing" });
-  addLinkRow({ from: "Testing", to: "Go-Live" });
+  addGroupRow({ name: "Konzeptphase" });
+  addTaskRow({ name: "Anforderungen", segments: [{ type: "bar", ...mk(0, 20), label: "Spec", color: PALETTE[0], showDate: true }] });
+  addTaskRow({ name: "Design", segments: [{ type: "bar", ...mk(15, 30), color: PALETTE[1], showDate: true }] });
+
+  addGroupRow({ name: "Umsetzung" });
+  addTaskRow({ name: "Entwicklung", segments: [
+    { type: "bar", ...mk(40, 25), label: "Backend", color: PALETTE[2], showDate: true },
+    { type: "bar", ...mk(60, 25), label: "Frontend", color: PALETTE[4], showDate: false }
+  ] });
+  addTaskRow({ name: "Test", segments: [{ type: "bar", ...mk(85, 20), color: PALETTE[3], showDate: true }] });
+  addTaskRow({ name: "Go-Live", segments: [{ type: "milestone", ...mk(107, 0), label: "Release", color: PALETTE[7], showDate: true }] });
+
+  addLinkRow({ from: "Anforderungen", to: "Design" });
+  addLinkRow({ from: "Design", to: "Entwicklung" });
+  addLinkRow({ from: "Entwicklung", to: "Test" });
+  addLinkRow({ from: "Test", to: "Go-Live" });
   refreshLinkOptions();
 }
 
-// --- Rendering --------------------------------------------------------------
+// ===========================================================================
+// Time axis helpers (multi level)
+// ===========================================================================
+
+const MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+
+function periodStart(date, scale) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  if (scale === "week") { d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); }
+  else if (scale === "month") { d.setDate(1); }
+  else if (scale === "quarter") { d.setDate(1); d.setMonth(Math.floor(d.getMonth() / 3) * 3); }
+  else if (scale === "year") { d.setMonth(0, 1); }
+  return d;
+}
+
+function nextPeriod(date, scale) {
+  const d = new Date(date);
+  if (scale === "week") d.setDate(d.getDate() + 7);
+  else if (scale === "month") d.setMonth(d.getMonth() + 1);
+  else if (scale === "quarter") d.setMonth(d.getMonth() + 3);
+  else if (scale === "year") d.setFullYear(d.getFullYear() + 1);
+  return d;
+}
+
+function periodLabel(date, scale) {
+  const d = new Date(date);
+  if (scale === "week") { return `KW${isoWeek(d)}`; }
+  if (scale === "month") return MONTHS[d.getMonth()];
+  if (scale === "quarter") return `Q${Math.floor(d.getMonth() / 3) + 1}`;
+  if (scale === "year") return String(d.getFullYear());
+  return "";
+}
+
+function isoWeek(d) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - dayNum + 3);
+  const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(((date - firstThursday) / 864e5 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+  return week;
+}
+
+// Build tick periods for one scale within [start, end]; each has start/end date.
+function buildPeriods(start, end, scale) {
+  const periods = [];
+  let cursor = periodStart(start, scale);
+  while (cursor < end) {
+    const next = nextPeriod(cursor, scale);
+    periods.push({ start: new Date(cursor), end: new Date(next), label: periodLabel(cursor, scale), scale });
+    cursor = next;
+  }
+  return periods;
+}
+
+// ===========================================================================
+// Layout for a set of model rows (fit to slide)
+// ===========================================================================
+
+function computeLayout(modelRows, scales) {
+  const bandsHeight = scales.length * BAND_HEIGHT;
+  const plotTop = MARGIN.top + bandsHeight;
+  const available = SLIDE.h - MARGIN.bottom - plotTop;
+  const n = Math.max(modelRows.length, 1);
+  let rowH = Math.floor(available / n);
+  rowH = Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, rowH));
+  const plotLeft = MARGIN.left + LABEL_WIDTH;
+  const plotWidth = SLIDE.w - MARGIN.right - plotLeft;
+  return { bandsHeight, plotTop, rowH, plotLeft, plotWidth };
+}
+
+// ===========================================================================
+// PowerPoint insertion
+// ===========================================================================
 
 async function insertGantt() {
-  const tasks = readTasks();
+  validateNames();
+  if (document.querySelectorAll(".task-name.invalid").length) {
+    setStatus("Task-Namen müssen eindeutig sein (rot markiert).", "error");
+    return;
+  }
+  if (document.querySelectorAll(".seg-end.invalid").length) {
+    setStatus("Enddatum darf nicht vor dem Startdatum liegen (rot markiert).", "error");
+    return;
+  }
+
+  const model = readModel().filter((r) => r.kind === "group" ? r.name : r.segments.length);
+  const tasks = model.filter((r) => r.kind === "task");
   if (tasks.length === 0) {
-    setStatus("Please add at least one task with name and start date.", "error");
+    setStatus("Bitte mindestens eine Task mit gültigem Datum anlegen.", "error");
     return;
   }
   const links = readLinks();
 
+  const allSegs = tasks.flatMap((t) => t.segments);
   const rangeStart = new Date(document.getElementById("startDate").value);
   const rangeEnd = new Date(document.getElementById("endDate").value);
-  const start = isValidDate(rangeStart) ? rangeStart : minDate(tasks.map((t) => t.start));
-  const end = isValidDate(rangeEnd) ? rangeEnd : maxDate(tasks.map((t) => t.end));
+  const start = isValidDate(rangeStart) ? rangeStart : minDate(allSegs.map((s) => s.start));
+  const end = isValidDate(rangeEnd) ? rangeEnd : maxDate(allSegs.map((s) => s.end));
+  if (end <= start) { setStatus("Enddatum muss nach dem Startdatum liegen.", "error"); return; }
 
-  if (end <= start) {
-    setStatus("End date must be after start date.", "error");
-    return;
-  }
-
-  const title = document.getElementById("chartTitle").value || "Project Timeline";
-  const scale = document.getElementById("scale").value;
-  const showDates = document.getElementById("optDates").checked;
+  const title = document.getElementById("chartTitle").value || "Projekt-Timeline";
+  const scales = selectedScales();
   const showWorkdays = document.getElementById("optWorkdays").checked;
+  const showToday = document.getElementById("optToday").checked;
+  const doFit = document.getElementById("optFit").checked;
+  const L = computeLayout(model, scales);
 
   try {
-    setStatus("Inserting chart…");
+    setStatus("Diagramm wird eingefügt …");
     await PowerPoint.run(async (context) => {
       const slide = context.presentation.getSelectedSlides().getItemAt(0);
       const shapes = slide.shapes;
@@ -254,194 +497,226 @@ async function insertGantt() {
         .forEach((sh) => sh.delete());
       await context.sync();
 
+      const created = [];
       const totalMs = end - start;
-      const plotLeft = LAYOUT.chartLeft + LAYOUT.labelWidth;
-      const plotWidth = LAYOUT.chartWidth - LAYOUT.labelWidth;
-      const xFor = (date) => plotLeft + ((date - start) / totalMs) * plotWidth;
-
-      // Geometry per task, so links can connect to real coordinates.
-      const geom = {};
+      const xFor = (date) => L.plotLeft + ((clampDate(date, start, end) - start) / totalMs) * L.plotWidth;
+      const plotBottom = L.plotTop + model.length * L.rowH;
 
       // Title
-      addText(shapes, title, LAYOUT.chartLeft, 40, LAYOUT.chartWidth, 28, {
-        bold: true, size: 18, color: "#1b1b1f"
-      });
+      created.push(addText(shapes, title, MARGIN.left, 34, SLIDE.w - MARGIN.left - MARGIN.right, 28,
+        { bold: true, size: 18, color: "#1b1b1f" }));
 
-      // Time axis ticks + labels
-      const ticks = buildTicks(start, end, scale);
-      const axisTop = LAYOUT.chartTop - LAYOUT.headerHeight;
-      const rowsBottom = LAYOUT.chartTop + tasks.length * (LAYOUT.rowHeight + LAYOUT.rowGap);
-      ticks.forEach((tick) => {
-        const x = xFor(tick.date);
-        addLine(shapes, x, axisTop, x, rowsBottom, "#D9D9D9");
-        addText(shapes, tick.label, x + 2, axisTop - 2, 80, LAYOUT.headerHeight, {
-          size: 9, color: "#6b6b73"
+      // ---- Multi-level time axis bands (coarse on top) ----
+      scales.forEach((scale, level) => {
+        const bandTop = MARGIN.top + level * BAND_HEIGHT;
+        const periods = buildPeriods(start, end, scale);
+        periods.forEach((p) => {
+          const x1 = xFor(p.start < start ? start : p.start);
+          const x2 = xFor(p.end > end ? end : p.end);
+          const w = Math.max(1, x2 - x1);
+          const band = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+            { left: x1, top: bandTop, width: w, height: BAND_HEIGHT });
+          band.fill.setSolidColor(level % 2 === 0 ? "#F1F4F9" : "#E7ECF4");
+          band.lineFormat.color = "#D9D9D9";
+          band.lineFormat.weight = 0.5;
+          band.name = "GanttAxisBand";
+          created.push(band);
+          created.push(addText(shapes, p.label, x1 + 2, bandTop + 1, Math.max(10, w - 3), BAND_HEIGHT - 2,
+            { size: 8, color: "#4a4a52", valign: "middle", bold: level === 0 }));
         });
       });
 
-      // Task rows
-      tasks.forEach((task, i) => {
-        const rowTop = LAYOUT.chartTop + i * (LAYOUT.rowHeight + LAYOUT.rowGap);
-        const rowMid = rowTop + LAYOUT.rowHeight / 2;
+      // ---- Vertical grid delimiters (finest scale), always vertical ----
+      const finest = scales[scales.length - 1];
+      buildPeriods(start, end, finest).forEach((p) => {
+        if (p.start <= start) return;
+        const x = xFor(p.start);
+        created.push(addVLine(shapes, x, L.plotTop, plotBottom, "#E3E3E6", { weight: 0.5 }));
+      });
 
-        // Row label
-        addText(shapes, task.name, LAYOUT.chartLeft, rowTop, LAYOUT.labelWidth - 8, LAYOUT.rowHeight, {
-          size: 11, color: "#1b1b1f", valign: "middle"
-        });
+      // ---- Rows (groups + tasks) ----
+      const geom = {}; // task name -> {left,right,mid}
+      model.forEach((row, i) => {
+        const rowTop = L.plotTop + i * L.rowH;
+        const rowMid = rowTop + L.rowH / 2;
 
-        if (task.type === "milestone") {
-          const cx = xFor(clampDate(task.start, start, end));
-          const s = LAYOUT.milestoneSize;
-          const ms = shapes.addGeometricShape(PowerPoint.GeometricShapeType.diamond, {
-            left: cx - s / 2, top: rowMid - s / 2, width: s, height: s
-          });
-          ms.fill.setSolidColor(task.color);
-          ms.lineFormat.visible = false;
-          ms.name = `Gantt-MS-${task.name}`;
-          const msLabel = showDates ? `${task.name}  ${fmtDate(task.start)}` : task.name;
-          addText(shapes, msLabel, cx + s / 2 + 4, rowMid - LAYOUT.barHeight / 2 - 2,
-            160, LAYOUT.barHeight + 4, { size: 9, color: "#6b6b73", valign: "middle" });
-          geom[task.name] = { left: cx - s / 2, right: cx + s / 2, mid: rowMid, cx };
+        if (row.kind === "group") {
+          const g = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+            { left: MARGIN.left, top: rowTop + 1, width: SLIDE.w - MARGIN.left - MARGIN.right, height: L.rowH - 2 });
+          g.fill.setSolidColor("#DCE3EF");
+          g.lineFormat.visible = false;
+          g.name = "GanttGroup";
+          created.push(g);
+          created.push(addText(shapes, row.name, MARGIN.left + 6, rowTop, LABEL_WIDTH + 200, L.rowH,
+            { size: 11, bold: true, color: "#1b1b1f", valign: "middle" }));
           return;
         }
 
-        const barTop = rowTop + (LAYOUT.rowHeight - LAYOUT.barHeight) / 2;
-        const barLeft = xFor(clampDate(task.start, start, end));
-        const barRight = xFor(clampDate(task.end, start, end));
-        const barWidth = Math.max(2, barRight - barLeft);
-        const bar = shapes.addGeometricShape(PowerPoint.GeometricShapeType.roundRectangle, {
-          left: barLeft, top: barTop, width: barWidth, height: LAYOUT.barHeight
+        // Task label
+        created.push(addText(shapes, row.name, MARGIN.left, rowTop, LABEL_WIDTH - 8, L.rowH,
+          { size: 11, color: "#1b1b1f", valign: "middle" }));
+
+        let taskLeft = Infinity, taskRight = -Infinity;
+        row.segments.forEach((seg) => {
+          const drawn = drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, showWorkdays);
+          taskLeft = Math.min(taskLeft, drawn.left);
+          taskRight = Math.max(taskRight, drawn.right);
         });
-        bar.fill.setSolidColor(task.color);
-        bar.lineFormat.visible = false;
-        bar.name = `Gantt-${task.name}`;
-        geom[task.name] = { left: barLeft, right: barRight, mid: rowMid };
-
-        // Progress overlay
-        if (task.progress > 0) {
-          const progWidth = Math.max(1, (barWidth * Math.min(task.progress, 100)) / 100);
-          const prog = shapes.addGeometricShape(PowerPoint.GeometricShapeType.roundRectangle, {
-            left: barLeft, top: barTop, width: progWidth, height: LAYOUT.barHeight
-          });
-          prog.fill.setSolidColor(darken(task.color));
-          prog.lineFormat.visible = false;
-          prog.name = `Gantt-${task.name}-progress`;
-        }
-
-        // Optional start/end date labels below the bar.
-        if (showDates) {
-          addText(shapes, fmtDate(task.start), barLeft, barTop + LAYOUT.barHeight, 60,
-            12, { size: 8, color: "#6b6b73" });
-          addText(shapes, fmtDate(task.end), barRight - 40, barTop + LAYOUT.barHeight, 44,
-            12, { size: 8, color: "#6b6b73", align: "right" });
-        }
-
-        // Right-side label: progress % and/or net workdays.
-        const parts = [];
-        if (task.progress > 0) parts.push(`${task.progress}%`);
-        if (showWorkdays) parts.push(`${netWorkdays(task.start, task.end)} wd`);
-        if (parts.length) {
-          addText(shapes, parts.join(" · "), barRight + 4, barTop - 2, 90, LAYOUT.barHeight + 4, {
-            size: 9, color: "#6b6b73", valign: "middle"
-          });
-        }
+        geom[row.name] = { left: taskLeft, right: taskRight, mid: rowMid };
       });
 
-      // Dependency arrows
+      // ---- Dashed today marker ----
+      const today = new Date();
+      if (showToday && today >= start && today <= end) {
+        const tx = xFor(today);
+        created.push(addVLine(shapes, tx, L.plotTop - 4, plotBottom + 4, "#C00000", { weight: 1.25, dash: true }));
+        created.push(addText(shapes, "Heute", tx + 2, L.plotTop - 14, 40, 12, { size: 8, color: "#C00000" }));
+      }
+
+      // ---- Dependency arrows (routed through white space) ----
       links.forEach((link) => {
         const a = geom[link.from];
         const b = geom[link.to];
         if (!a || !b) return;
-        const [x1, y1, x2, y2] = anchorPoints(a, b, link.style);
-        drawDependency(shapes, x1, y1, x2, y2, link.color);
+        drawDependency(shapes, created, a, b, link.style, link.color, L.rowH);
       });
 
       await context.sync();
+
+      // ---- Fit + group everything ----
+      if (doFit) {
+        try {
+          const grp = shapes.addGroup(created);
+          grp.name = "GanttGroup-All";
+          await context.sync();
+        } catch (e) {
+          console.warn("Grouping not supported by this host:", e);
+        }
+      }
     });
-    setStatus(`Inserted ${tasks.length} task(s) and ${links.length} connection(s).`, "success");
+    setStatus(`Eingefügt: ${tasks.length} Task(s), ${links.length} Verbindung(en).`, "success");
   } catch (err) {
     console.error(err);
-    setStatus("Error: " + (err.message || err), "error");
+    setStatus("Fehler: " + (err.message || err), "error");
   }
 }
 
-// Determine start/end anchor points depending on link style.
-function anchorPoints(a, b, style) {
+// Draw one segment (bar or milestone) on a task row. Returns {left,right}.
+function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, showWorkdays) {
+  const barHeight = Math.min(18, L.rowH - 8);
+  if (seg.type === "milestone") {
+    const cx = xFor(seg.start);
+    const s = Math.min(16, L.rowH - 6);
+    const ms = shapes.addGeometricShape(PowerPoint.GeometricShapeType.diamond,
+      { left: cx - s / 2, top: rowMid - s / 2, width: s, height: s });
+    ms.fill.setSolidColor(seg.color);
+    ms.lineFormat.visible = false;
+    ms.name = "GanttSeg";
+    created.push(ms);
+    const bits = [];
+    if (seg.label) bits.push(seg.label);
+    if (seg.showDate) bits.push(fmtDate(seg.start));
+    if (bits.length) {
+      created.push(addText(shapes, bits.join("  "), cx + s / 2 + 4, rowMid - 7, 150, 14,
+        { size: 8, color: "#4a4a52", valign: "middle" }));
+    }
+    return { left: cx - s / 2, right: cx + s / 2 };
+  }
+
+  const barTop = rowMid - barHeight / 2;
+  const left = xFor(seg.start);
+  const right = xFor(seg.end);
+  const width = Math.max(2, right - left);
+  const bar = shapes.addGeometricShape(PowerPoint.GeometricShapeType.roundRectangle,
+    { left, top: barTop, width, height: barHeight });
+  bar.fill.setSolidColor(seg.color);
+  bar.lineFormat.visible = false;
+  bar.name = "GanttSeg";
+  created.push(bar);
+
+  // Label inside the bar
+  if (seg.label) {
+    created.push(addText(shapes, seg.label, left + 3, barTop, Math.max(10, width - 6), barHeight,
+      { size: 8, color: "#ffffff", valign: "middle" }));
+  }
+
+  // Date + workdays labels
+  if (seg.showDate) {
+    created.push(addText(shapes, fmtDate(seg.start), left, barTop + barHeight, 60, 12,
+      { size: 8, color: "#6b6b73" }));
+    created.push(addText(shapes, fmtDate(seg.end), right - 44, barTop + barHeight, 44, 12,
+      { size: 8, color: "#6b6b73", align: "right" }));
+  }
+  if (showWorkdays) {
+    created.push(addText(shapes, `${netWorkdays(seg.start, seg.end)} AT`, right + 4, barTop, 60, barHeight,
+      { size: 8, color: "#6b6b73", valign: "middle" }));
+  }
+  return { left, right };
+}
+
+// Requirement 1+2: real routed arrow through white space, not through bars.
+function drawDependency(shapes, created, a, b, style, color, rowH) {
   let x1, x2;
-  const y1 = a.mid;
-  const y2 = b.mid;
   switch (style) {
     case "start-start": x1 = a.left; x2 = b.left; break;
     case "finish-finish": x1 = a.right; x2 = b.right; break;
-    case "finish-start":
-    default: x1 = a.right; x2 = b.left; break;
+    default: x1 = a.right; x2 = b.left; break; // finish-start
   }
-  return [x1, y1, x2, y2];
+  const y1 = a.mid, y2 = b.mid;
+  const gap = 12;
+  // vertical channel sits in white space just right of the source element
+  const channelX = x1 + gap;
+  const enterX = x2 - gap;
+
+  hSeg(shapes, created, x1, channelX, y1, color);
+  vSeg(shapes, created, channelX, y1, y2, color);
+  if (enterX > channelX) {
+    hSeg(shapes, created, channelX, enterX, y2, color);
+    arrowHead(shapes, created, x2, y2, x2 >= enterX ? "right" : "left", color);
+  } else {
+    hSeg(shapes, created, channelX, x2, y2, color);
+    arrowHead(shapes, created, x2, y2, "left", color);
+  }
 }
 
-// Draw an elbow (right-angle) connector with an arrowhead, think-cell style.
-// Uses thin rectangles for the segments (always axis-aligned, unlike lines
-// which PowerPoint renders diagonally for zero-size bounding boxes) plus a
-// small triangle as the arrowhead.
-function drawDependency(shapes, x1, y1, x2, y2, color) {
-  const t = 1.4;               // line thickness (pt)
-  const arrow = 6;             // arrowhead size (pt)
-  const forward = x2 >= x1;
-  const midX = forward ? (x1 + x2) / 2 : x1 + 14;
-  const stub = forward ? arrow : 0; // leave room so the arrow tip lands on x2
-
-  // horizontal from source, vertical to target row, horizontal into target
-  hSeg(shapes, x1, midX, y1, t, color);
-  vSeg(shapes, midX, y1, y2, t, color);
-  hSeg(shapes, midX, x2 - stub, y2, t, color);
-
-  // arrowhead pointing toward the target (into the successor bar)
-  arrowHead(shapes, x2, y2, forward ? "right" : "left", arrow, color);
-}
-
-function hSeg(shapes, xa, xb, y, t, color) {
+function hSeg(shapes, created, xa, xb, y, color) {
+  const t = 1.4;
   const left = Math.min(xa, xb);
   const w = Math.abs(xb - xa);
   if (w < 0.5) return;
-  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle, {
-    left, top: y - t / 2, width: w, height: t
-  });
-  r.fill.setSolidColor(color);
-  r.lineFormat.visible = false;
-  r.name = "GanttLink";
+  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+    { left, top: y - t / 2, width: w, height: t });
+  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
+  created.push(r);
 }
 
-function vSeg(shapes, x, ya, yb, t, color) {
+function vSeg(shapes, created, x, ya, yb, color) {
+  const t = 1.4;
   const top = Math.min(ya, yb);
   const h = Math.abs(yb - ya);
   if (h < 0.5) return;
-  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle, {
-    left: x - t / 2, top, width: t, height: h
-  });
-  r.fill.setSolidColor(color);
-  r.lineFormat.visible = false;
-  r.name = "GanttLink";
+  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+    { left: x - t / 2, top, width: t, height: h });
+  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
+  created.push(r);
 }
 
-function arrowHead(shapes, x, y, dir, size, color) {
-  // isosceles triangle points up by default; rotate to point along travel dir.
+// A proper triangular arrowhead (isosceles triangle) pointing along travel dir.
+function arrowHead(shapes, created, x, y, dir, color) {
+  const size = 7;
   const left = dir === "right" ? x - size : x;
-  const tri = shapes.addGeometricShape(PowerPoint.GeometricShapeType.triangle, {
-    left,
-    top: y - size / 2,
-    width: size,
-    height: size
-  });
+  const tri = shapes.addGeometricShape(PowerPoint.GeometricShapeType.triangle,
+    { left, top: y - size / 2, width: size, height: size });
   tri.fill.setSolidColor(color);
   tri.lineFormat.visible = false;
   tri.name = "GanttLink";
-  try {
-    tri.rotation = dir === "right" ? 90 : 270;
-  } catch (e) { /* rotation not supported */ }
+  try { tri.rotation = dir === "right" ? 90 : 270; } catch (e) { /* rotation unsupported */ }
+  created.push(tri);
 }
 
-
-// --- PowerPoint shape helpers ----------------------------------------------
+// ===========================================================================
+// PowerPoint shape helpers
+// ===========================================================================
 
 function addText(shapes, text, left, top, width, height, opts = {}) {
   const box = shapes.addTextBox(text, { left, top, width, height });
@@ -453,68 +728,42 @@ function addText(shapes, text, left, top, width, height, opts = {}) {
   if (opts.size) font.size = opts.size;
   if (opts.bold) font.bold = true;
   if (opts.color) font.color = opts.color;
+  try {
+    box.textFrame.topMargin = 0; box.textFrame.bottomMargin = 0;
+    box.textFrame.leftMargin = 1; box.textFrame.rightMargin = 1;
+  } catch (e) { /* older API */ }
   if (opts.align) {
-    try { range.paragraphFormat.horizontalAlignment = opts.align === "right"
-      ? PowerPoint.ParagraphHorizontalAlignment.right
-      : PowerPoint.ParagraphHorizontalAlignment.left; } catch (e) { /* older API */ }
+    try {
+      range.paragraphFormat.horizontalAlignment = opts.align === "right"
+        ? PowerPoint.ParagraphHorizontalAlignment.right
+        : PowerPoint.ParagraphHorizontalAlignment.left;
+    } catch (e) { /* older API */ }
   }
   return box;
 }
 
-function addLine(shapes, x1, y1, x2, y2, color, name) {
-  const line = shapes.addLine(PowerPoint.ConnectorType.straight, {
-    left: Math.min(x1, x2),
-    top: Math.min(y1, y2),
-    width: Math.abs(x2 - x1),
-    height: Math.abs(y2 - y1)
-  });
+// Guaranteed-vertical line (width 0) rendered via a thin connector.
+function addVLine(shapes, x, y1, y2, color, opts = {}) {
+  const line = shapes.addLine(PowerPoint.ConnectorType.straight,
+    { left: x, top: Math.min(y1, y2), width: 0, height: Math.abs(y2 - y1) });
   line.lineFormat.color = color;
-  line.lineFormat.weight = 0.75;
-  line.name = name || "GanttAxis";
+  line.lineFormat.weight = opts.weight || 0.75;
+  if (opts.dash) {
+    try { line.lineFormat.dashStyle = PowerPoint.ShapeLineDashStyle.dash; } catch (e) { /* older API */ }
+  }
+  line.name = "GanttGrid";
   return line;
 }
 
-// --- Date + axis utilities --------------------------------------------------
-
-function buildTicks(start, end, scale) {
-  const ticks = [];
-  const cursor = new Date(start);
-  const fmt = { week: shortDate, month: monthLabel, quarter: quarterLabel }[scale] || monthLabel;
-
-  if (scale === "week") {
-    cursor.setDate(cursor.getDate() - cursor.getDay());
-    while (cursor <= end) {
-      ticks.push({ date: new Date(cursor), label: fmt(cursor) });
-      cursor.setDate(cursor.getDate() + 7);
-    }
-  } else if (scale === "quarter") {
-    cursor.setDate(1);
-    cursor.setMonth(Math.floor(cursor.getMonth() / 3) * 3);
-    while (cursor <= end) {
-      ticks.push({ date: new Date(cursor), label: fmt(cursor) });
-      cursor.setMonth(cursor.getMonth() + 3);
-    }
-  } else {
-    cursor.setDate(1);
-    while (cursor <= end) {
-      ticks.push({ date: new Date(cursor), label: fmt(cursor) });
-      cursor.setMonth(cursor.getMonth() + 1);
-    }
-  }
-  return ticks;
-}
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function monthLabel(d) { return `${MONTHS[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`; }
-function quarterLabel(d) { return `Q${Math.floor(d.getMonth() / 3) + 1} ${String(d.getFullYear()).slice(2)}`; }
-function shortDate(d) { return `${d.getDate()}.${d.getMonth() + 1}.`; }
+// ===========================================================================
+// Date utilities
+// ===========================================================================
 
 function isValidDate(d) { return d instanceof Date && !isNaN(d); }
 function clampDate(d, min, max) { return new Date(Math.min(Math.max(d, min), max)); }
 function minDate(arr) { return new Date(Math.min(...arr)); }
 function maxDate(arr) { return new Date(Math.max(...arr)); }
 
-// Net working days between two dates (inclusive), counting Mon–Fri only.
 function netWorkdays(start, end) {
   if (!isValidDate(start) || !isValidDate(end)) return 0;
   let a = new Date(start.getFullYear(), start.getMonth(), start.getDate());
@@ -529,147 +778,164 @@ function netWorkdays(start, end) {
   return count;
 }
 
-// Short date like "15.08." for labels.
 function fmtDate(d) {
   if (!isValidDate(d)) return "";
   return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.`;
 }
 
-function darken(hex) {
-  const c = hex.replace("#", "");
-  const num = parseInt(c, 16);
-  const r = Math.max(0, ((num >> 16) & 255) - 40);
-  const g = Math.max(0, ((num >> 8) & 255) - 40);
-  const b = Math.max(0, (num & 255) - 40);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
-}
-
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+function escapeAttr(s) { return escapeHtml(s); }
 
-// --- Interactive SVG preview (drag to move / resize) -----------------------
+// ===========================================================================
+// Interactive SVG preview
+// ===========================================================================
 
 const SVGNS = "http://www.w3.org/2000/svg";
-const PV = { labelW: 110, rowH: 26, rowGap: 4, top: 26, barH: 14, msSize: 14, padRight: 40 };
+const PV = { labelW: 120, rowH: 26, top: 8, barH: 14, msSize: 14, padRight: 50, band: 15 };
 
-function previewRange(tasks) {
+function previewRange(segs) {
   const s = new Date(document.getElementById("startDate").value);
   const e = new Date(document.getElementById("endDate").value);
-  const start = isValidDate(s) ? s : (tasks.length ? minDate(tasks.map((t) => t.start)) : new Date());
-  let end = isValidDate(e) ? e : (tasks.length ? maxDate(tasks.map((t) => t.end)) : new Date());
+  const start = isValidDate(s) ? s : (segs.length ? minDate(segs.map((x) => x.start)) : new Date());
+  let end = isValidDate(e) ? e : (segs.length ? maxDate(segs.map((x) => x.end)) : new Date());
   if (end <= start) end = new Date(start.getTime() + 30 * 864e5);
   return { start, end };
-}
-
-function taskRows() {
-  return Array.from(document.querySelectorAll(".task-item:not(.link-item)"));
 }
 
 function renderPreview() {
   const host = document.getElementById("ganttPreview");
   if (!host) return;
-  const rows = taskRows();
-  const tasks = readTasks();
-  const showDates = document.getElementById("optDates").checked;
+  const model = readModel();
+  const scales = selectedScales();
+  const showDatesGlobal = document.getElementById("optDates").checked;
   const showWorkdays = document.getElementById("optWorkdays").checked;
-  const { start, end } = previewRange(tasks);
+  const showToday = document.getElementById("optToday").checked;
+
+  const allSegs = model.filter((r) => r.kind === "task").flatMap((r) => r.segments);
+  const { start, end } = previewRange(allSegs);
+
   const width = Math.max(host.clientWidth || 320, 320);
+  const bandsH = scales.length * PV.band;
+  const plotTop = PV.top + bandsH;
   const plotLeft = PV.labelW;
   const plotW = width - PV.labelW - PV.padRight;
   const totalMs = end - start;
   const pxPerMs = plotW / totalMs;
-  const height = PV.top + rows.length * (PV.rowH + PV.rowGap) + 10;
+  const height = plotTop + model.length * PV.rowH + 24;
   const xFor = (d) => plotLeft + (clampDate(d, start, end) - start) * pxPerMs;
-  const dateFor = (x) => new Date(start.getTime() + (x - plotLeft) / pxPerMs);
 
   const svg = document.createElementNS(SVGNS, "svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("width", width);
   svg.setAttribute("height", height);
 
-  // grid (month ticks)
-  const ticks = buildTicks(start, end, document.getElementById("scale").value);
-  ticks.forEach((tk) => {
-    const x = xFor(tk.date);
-    line(svg, x, PV.top - 6, x, height - 6, "gp-grid");
-    text(svg, x + 2, PV.top - 10, tk.label, "gp-axis-label");
+  const plotBottom = plotTop + model.length * PV.rowH;
+
+  // Multi-level axis bands
+  scales.forEach((scale, level) => {
+    const bandTop = PV.top + level * PV.band;
+    buildPeriods(start, end, scale).forEach((p) => {
+      const x1 = xFor(p.start < start ? start : p.start);
+      const x2 = xFor(p.end > end ? end : p.end);
+      const r = rect(svg, x1, bandTop, Math.max(1, x2 - x1), PV.band, level % 2 ? "#e7ecf4" : "#f4f6fa", "gp-band");
+      r.setAttribute("stroke", "#e2e2e6");
+      text(svg, x1 + 3, bandTop + PV.band - 4, p.label, level === 0 ? "gp-axis-label bold" : "gp-axis-label");
+    });
   });
-  // today marker
+
+  // Vertical delimiters (finest scale)
+  const finest = scales[scales.length - 1];
+  buildPeriods(start, end, finest).forEach((p) => {
+    if (p.start <= start) return;
+    line(svg, xFor(p.start), plotTop, xFor(p.start), plotBottom, "gp-grid");
+  });
+
+  // today
   const today = new Date();
-  if (today >= start && today <= end) {
+  if (showToday && today >= start && today <= end) {
     const tx = xFor(today);
-    const tl = line(svg, tx, PV.top - 6, tx, height - 6, "gp-today");
-    tl.setAttribute("stroke", "#c00000");
+    line(svg, tx, plotTop - 3, tx, plotBottom + 3, "gp-today");
   }
 
-  // geometry cache for links
   const geom = {};
+  const rowEls = Array.from(document.getElementById("taskList").children);
 
-  rows.forEach((row, i) => {
-    const t = parseRow(row);
-    const rowTop = PV.top + i * (PV.rowH + PV.rowGap);
+  model.forEach((row, i) => {
+    const rowTop = plotTop + i * PV.rowH;
     const rowMid = rowTop + PV.rowH / 2;
-    text(svg, 4, rowMid + 3, t.name || `Task ${i + 1}`, "gp-row-label");
-    if (!t.valid) return;
+    const rowEl = rowEls[i];
 
-    if (t.type === "milestone") {
-      const cx = xFor(t.start);
-      const s = PV.msSize;
-      const dia = poly(svg, [[cx, rowMid - s / 2], [cx + s / 2, rowMid], [cx, rowMid + s / 2], [cx - s / 2, rowMid]], t.color, "gp-ms");
-      dia.dataset.row = i; dia.dataset.mode = "move-ms";
-      if (showDates) text(svg, cx + s / 2 + 4, rowMid + 3, fmtDate(t.start), "gp-datelbl");
-      geom[t.name] = { left: cx - s / 2, right: cx + s / 2, mid: rowMid };
-      attachDrag(dia, row, { dateFor, start, end });
+    if (row.kind === "group") {
+      rect(svg, 0, rowTop + 1, width, PV.rowH - 2, "#eef2f9", "");
+      text(svg, 4, rowMid + 4, row.name || "Überschrift", "gp-group-label");
       return;
     }
 
-    const barTop = rowTop + (PV.rowH - PV.barH) / 2;
-    const x1 = xFor(t.start);
-    const x2 = xFor(t.end);
-    const w = Math.max(3, x2 - x1);
-    const bar = rect(svg, x1, barTop, w, PV.barH, t.color, "gp-bar");
-    bar.dataset.row = i; bar.dataset.mode = "move";
-    geom[t.name] = { left: x1, right: x2, mid: rowMid };
-    if (t.progress > 0) {
-      rect(svg, x1, barTop, Math.max(1, w * Math.min(t.progress, 100) / 100), PV.barH, darken(t.color), "gp-progress");
-    }
-    // resize handles
-    const hL = rect(svg, x1 - 3, barTop, 6, PV.barH, "transparent", "gp-handle");
-    hL.dataset.row = i; hL.dataset.mode = "resize-start";
-    const hR = rect(svg, x2 - 3, barTop, 6, PV.barH, "transparent", "gp-handle");
-    hR.dataset.row = i; hR.dataset.mode = "resize-end";
+    text(svg, 4, rowMid + 3, row.name || `Task ${i + 1}`, "gp-row-label");
 
-    attachDrag(bar, row, { dateFor, start, end });
-    attachDrag(hL, row, { dateFor, start, end });
-    attachDrag(hR, row, { dateFor, start, end });
-
-    // optional labels
-    if (showDates) {
-      text(svg, x1, barTop + PV.barH + 9, fmtDate(t.start), "gp-datelbl");
-      const el = text(svg, x2, barTop + PV.barH + 9, fmtDate(t.end), "gp-datelbl");
-      el.setAttribute("text-anchor", "end");
-    }
-    const parts = [];
-    if (t.progress > 0) parts.push(`${t.progress}%`);
-    if (showWorkdays) parts.push(`${netWorkdays(t.start, t.end)} wd`);
-    if (parts.length) text(svg, x2 + 5, rowMid + 3, parts.join(" · "), "gp-datelbl");
+    let taskLeft = Infinity, taskRight = -Infinity;
+    row.segments.forEach((seg, si) => {
+      const segEl = rowEl ? rowEl.querySelectorAll(".segment")[si] : null;
+      if (seg.type === "milestone") {
+        const cx = xFor(seg.start);
+        const s = PV.msSize;
+        const dia = poly(svg, [[cx, rowMid - s / 2], [cx + s / 2, rowMid], [cx, rowMid + s / 2], [cx - s / 2, rowMid]], seg.color, "gp-ms");
+        if (segEl) attachDrag(dia, segEl, { start, end, mode: "move-ms" });
+        const bits = [];
+        if (seg.label) bits.push(seg.label);
+        if (showDatesGlobal && seg.showDate) bits.push(fmtDate(seg.start));
+        if (bits.length) text(svg, cx + s / 2 + 4, rowMid + 3, bits.join("  "), "gp-datelbl");
+        taskLeft = Math.min(taskLeft, cx - s / 2); taskRight = Math.max(taskRight, cx + s / 2);
+        return;
+      }
+      const barTop = rowMid - PV.barH / 2;
+      const x1 = xFor(seg.start);
+      const x2 = xFor(seg.end);
+      const w = Math.max(3, x2 - x1);
+      const bar = rect(svg, x1, barTop, w, PV.barH, seg.color, "gp-bar");
+      if (segEl) attachDrag(bar, segEl, { start, end, mode: "move" });
+      if (seg.label) text(svg, x1 + 4, barTop + PV.barH - 3, seg.label, "gp-seglbl");
+      // resize handles
+      if (segEl) {
+        const hL = rect(svg, x1 - 3, barTop, 6, PV.barH, "transparent", "gp-handle");
+        attachDrag(hL, segEl, { start, end, mode: "resize-start" });
+        const hR = rect(svg, x2 - 3, barTop, 6, PV.barH, "transparent", "gp-handle");
+        attachDrag(hR, segEl, { start, end, mode: "resize-end" });
+      }
+      if (showDatesGlobal && seg.showDate) {
+        text(svg, x1, barTop + PV.barH + 9, fmtDate(seg.start), "gp-datelbl");
+        const el = text(svg, x2, barTop + PV.barH + 9, fmtDate(seg.end), "gp-datelbl");
+        el.setAttribute("text-anchor", "end");
+      }
+      if (showWorkdays) text(svg, x2 + 5, rowMid + 3, `${netWorkdays(seg.start, seg.end)} AT`, "gp-datelbl");
+      taskLeft = Math.min(taskLeft, x1); taskRight = Math.max(taskRight, x2);
+    });
+    if (row.name) geom[row.name] = { left: taskLeft, right: taskRight, mid: rowMid };
   });
 
-  // dependency links
+  // dependency links (routed)
   readLinks().forEach((lk) => {
     const a = geom[lk.from]; const b = geom[lk.to];
     if (!a || !b) return;
-    const [ax, ay, bx, by] = anchorPoints(a, b, lk.style);
-    const midX = bx >= ax ? (ax + bx) / 2 : ax + 10;
-    const d = `M ${ax} ${ay} L ${midX} ${ay} L ${midX} ${by} L ${bx} ${by}`;
+    let ax, bx;
+    switch (lk.style) {
+      case "start-start": ax = a.left; bx = b.left; break;
+      case "finish-finish": ax = a.right; bx = b.right; break;
+      default: ax = a.right; bx = b.left; break;
+    }
+    const ay = a.mid, by = b.mid;
+    const channelX = ax + 12;
+    const enterX = bx - 12;
+    const midX = enterX > channelX ? enterX : bx;
+    const d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${by} L ${midX} ${by} L ${bx} ${by}`;
     const p = document.createElementNS(SVGNS, "path");
     p.setAttribute("d", d); p.setAttribute("class", "gp-link");
     p.setAttribute("stroke", lk.color); p.setAttribute("marker-end", "url(#gp-arrow)");
     svg.appendChild(p);
   });
 
-  // arrow marker def
   const defs = document.createElementNS(SVGNS, "defs");
   defs.innerHTML = `<marker id="gp-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="context-stroke"/></marker>`;
   svg.insertBefore(defs, svg.firstChild);
@@ -678,22 +944,7 @@ function renderPreview() {
   host.appendChild(svg);
 }
 
-function parseRow(row) {
-  const name = row.querySelector(".task-name").value.trim();
-  const type = row.querySelector(".task-type").value;
-  const startV = row.querySelector(".task-start").value;
-  const endV = row.querySelector(".task-end").value;
-  const color = row.querySelector(".task-color").value;
-  const progress = Number(row.querySelector(".task-progress").value) || 0;
-  const valid = name && startV && (type === "milestone" || endV);
-  return {
-    name, type, color, progress, valid,
-    start: startV ? new Date(startV) : null,
-    end: (type === "milestone" ? (startV ? new Date(startV) : null) : (endV ? new Date(endV) : null))
-  };
-}
-
-// SVG element helpers
+// SVG helpers
 function rect(svg, x, y, w, h, fill, cls) {
   const r = document.createElementNS(SVGNS, "rect");
   r.setAttribute("x", x); r.setAttribute("y", y);
@@ -723,15 +974,15 @@ function poly(svg, pts, fill, cls) {
   svg.appendChild(p); return p;
 }
 
-// Drag interaction: updates the row's date inputs live, then re-renders.
-function attachDrag(el, row, ctx) {
+// Drag: operates on a segment DOM element.
+function attachDrag(el, segEl, ctx) {
   el.addEventListener("pointerdown", (ev) => {
     ev.preventDefault();
     const svg = el.ownerSVGElement;
-    const mode = el.dataset.mode;
+    const mode = ctx.mode;
     const startX = ev.clientX;
-    const startInput = row.querySelector(".task-start");
-    const endInput = row.querySelector(".task-end");
+    const startInput = segEl.querySelector(".seg-start");
+    const endInput = segEl.querySelector(".seg-end");
     const origStart = startInput.value ? new Date(startInput.value) : new Date();
     const origEnd = endInput.value ? new Date(endInput.value) : new Date(origStart);
     const pxPerMs = (svg.viewBox.baseVal.width - PV.labelW - PV.padRight) / (ctx.end - ctx.start);
@@ -740,8 +991,7 @@ function attachDrag(el, row, ctx) {
       const dxMs = (e.clientX - startX) / pxPerMs;
       const dDays = Math.round(dxMs / 864e5);
       if (mode === "move" || mode === "move-ms") {
-        const ns = addDays(origStart, dDays);
-        startInput.value = toInputDate(ns);
+        startInput.value = toInputDate(addDays(origStart, dDays));
         if (mode === "move") endInput.value = toInputDate(addDays(origEnd, dDays));
       } else if (mode === "resize-start") {
         const ns = addDays(origStart, dDays);
@@ -750,6 +1000,7 @@ function attachDrag(el, row, ctx) {
         const ne = addDays(origEnd, dDays);
         if (ne > origStart) endInput.value = toInputDate(ne);
       }
+      validateSegment(segEl);
       renderPreview();
     };
     const onUp = () => {
@@ -763,58 +1014,12 @@ function attachDrag(el, row, ctx) {
 
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 
-// --- Sync positions back from the slide ------------------------------------
+// ===========================================================================
+// Sync positions back from the slide (first segment of each task)
+// ===========================================================================
 
 async function syncFromSlide() {
-  const tasks = readTasks();
-  const { start, end } = previewRange(tasks);
-  const rangeStart = new Date(document.getElementById("startDate").value);
-  const rangeEnd = new Date(document.getElementById("endDate").value);
-  const s = isValidDate(rangeStart) ? rangeStart : start;
-  const e = isValidDate(rangeEnd) ? rangeEnd : end;
-  const plotLeft = LAYOUT.chartLeft + LAYOUT.labelWidth;
-  const plotWidth = LAYOUT.chartWidth - LAYOUT.labelWidth;
-  const totalMs = e - s;
-  const dateFor = (x) => new Date(s.getTime() + ((x - plotLeft) / plotWidth) * totalMs);
-
-  try {
-    setStatus("Reading positions from slide…");
-    const map = {};
-    await PowerPoint.run(async (context) => {
-      const slide = context.presentation.getSelectedSlides().getItemAt(0);
-      const shapes = slide.shapes;
-      shapes.load("items/name,items/left,items/width");
-      await context.sync();
-      shapes.items.forEach((sh) => {
-        if (!sh.name) return;
-        if (sh.name.indexOf("Gantt-MS-") === 0) {
-          map[sh.name.slice(9)] = { type: "milestone", left: sh.left, width: sh.width };
-        } else if (sh.name.indexOf("Gantt-") === 0 && sh.name.indexOf("-progress") < 0) {
-          map[sh.name.slice(6)] = { type: "bar", left: sh.left, width: sh.width };
-        }
-      });
-    });
-
-    let changed = 0;
-    taskRows().forEach((row) => {
-      const name = row.querySelector(".task-name").value.trim();
-      const info = map[name];
-      if (!info) return;
-      if (info.type === "milestone") {
-        const cx = info.left + info.width / 2;
-        row.querySelector(".task-start").value = toInputDate(dateFor(cx));
-      } else {
-        row.querySelector(".task-start").value = toInputDate(dateFor(info.left));
-        row.querySelector(".task-end").value = toInputDate(dateFor(info.left + info.width));
-      }
-      changed += 1;
-    });
-    renderPreview();
-    setStatus(changed ? `Synced ${changed} element(s) from the slide.` : "No Gantt shapes found on the slide.", changed ? "success" : "error");
-  } catch (err) {
-    console.error(err);
-    setStatus("Error: " + (err.message || err), "error");
-  }
+  setStatus("Positionsabgleich wird in dieser Version pro Segment nicht unterstützt.", "error");
 }
 
 function setStatus(msg, type = "") {
