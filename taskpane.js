@@ -654,11 +654,12 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
   return { left, right };
 }
 
-// Requirement 1+2: dependency drawn like PowerPoint's "Verbinder: gewinkelt
-// mit Pfeil" (elbow connector with arrowhead). The elbow BODY is a genuine
-// native connector (ConnectorType.elbow) — PowerPoint auto-routes it at right
-// angles between the two points. Because the Office.js ShapeLineFormat API has
-// NO arrowhead property, the head is drawn as a native triangle at the target.
+// Requirement 1+2: dependency drawn as a self-routed right-angle (elbow) arrow
+// with a real arrowhead. We control the exact orthogonal path ourselves using
+// thin axis-aligned rectangles (guaranteed horizontal/vertical, never diagonal)
+// and finish with a native block-arrow head, so the line and its head always
+// line up — unlike the auto-routed native connector, which places its bends
+// independently of where we can put the head.
 function drawDependency(shapes, created, a, b, style, color, rowH) {
   let sx, tx, headDir;
   switch (style) {
@@ -670,20 +671,49 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
   }
   const sy = a.mid, ty = b.mid;
   const head = 8;                       // arrowhead length
-  // End the connector at the arrowhead's base so the tip sits on the edge.
-  const endX = headDir === "right" ? tx - head : tx + head;
+  const stub = 14;                      // horizontal stub length into whitespace
 
-  // Native elbow connector for the routed body.
-  const conn = shapes.addLine(PowerPoint.ConnectorType.elbow, {
-    left: sx, top: sy, width: endX - sx, height: ty - sy,
-  });
-  conn.lineFormat.color = color;
-  conn.lineFormat.weight = 1.5;
-  conn.name = "GanttLink";
-  created.push(conn);
+  // The arrowhead tip sits exactly on the target edge (tx). Its base (where the
+  // routed line must arrive) is `head` points away, on the approach side.
+  const baseX = headDir === "right" ? tx - head : tx + head;
 
-  // Native triangular arrowhead at the target, pointing INTO the target bar.
+  // Route: exit the source horizontally by `stub`, drop/rise to the target row,
+  // then run horizontally to the arrowhead base. Choose the vertical channel so
+  // the final horizontal segment enters the head from the correct side.
+  const chX = headDir === "right"
+    ? Math.max(sx + stub, baseX - stub)      // channel left of the head
+    : Math.min(sx - stub, baseX + stub);     // channel right of the head
+
+  hSeg(shapes, created, sx, chX, sy, color);   // exit stub (+ maybe more)
+  vSeg(shapes, created, chX, sy, ty, color);   // vertical channel
+  hSeg(shapes, created, chX, baseX, ty, color); // approach to arrowhead base
+
+  // Native block-arrow head, pointing INTO the target bar (no rotation needed).
   arrowTri(shapes, created, tx, ty, headDir, head, color);
+}
+
+// Thin horizontal line segment (a filled rectangle — always perfectly level).
+function hSeg(shapes, created, xa, xb, y, color) {
+  const t = 1.6;
+  const left = Math.min(xa, xb);
+  const w = Math.abs(xb - xa);
+  if (w < 0.4) return;
+  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+    { left, top: y - t / 2, width: w, height: t });
+  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
+  created.push(r);
+}
+
+// Thin vertical line segment (a filled rectangle — always perfectly plumb).
+function vSeg(shapes, created, x, ya, yb, color) {
+  const t = 1.6;
+  const top = Math.min(ya, yb);
+  const h = Math.abs(yb - ya);
+  if (h < 0.4) return;
+  const r = shapes.addGeometricShape(PowerPoint.GeometricShapeType.rectangle,
+    { left: x - t / 2, top, width: t, height: h });
+  r.fill.setSolidColor(color); r.lineFormat.visible = false; r.name = "GanttLink";
+  created.push(r);
 }
 
 // Filled arrowhead. Rotation of the "triangle" shape is unreliable on some
