@@ -963,6 +963,24 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
   const channelX = x1 + gap;
   const enterX = x2 - gap;
 
+  // Variante B: Wenn das Ziel links der Quelle liegt (rückwärts laufende
+  // Verbindung), ermittle den Abstand d = x1 - x2 und springe für Punkt 2 den
+  // doppelten Abstand zurück (approachX = x2 - 2*d). Von dort läuft die Route im
+  // Weißbereich zwischen den Zeilen um beide Balken herum und trifft Punkt 2 von
+  // links, sodass der Pfeil nach rechts in das Ziel zeigt.
+  if (x2 < x1) {
+    const d = x1 - x2;
+    const approachX = x2 - 2 * d;
+    const midY = (y1 + y2) / 2;
+    hSeg(shapes, created, x1, channelX, y1, color);
+    vSeg(shapes, created, channelX, y1, midY, color);
+    hSeg(shapes, created, channelX, approachX, midY, color);
+    vSeg(shapes, created, approachX, midY, y2, color);
+    hSeg(shapes, created, approachX, x2, y2, color);
+    arrowHead(shapes, created, x2, y2, "right", color);
+    return;
+  }
+
   hSeg(shapes, created, x1, channelX, y1, color);
   vSeg(shapes, created, channelX, y1, y2, color);
   if (enterX > channelX) {
@@ -1243,8 +1261,17 @@ function renderPreview() {
     const ay = a.mid, by = b.mid;
     const channelX = ax + 12;
     const enterX = bx - 12;
-    const midX = enterX > channelX ? enterX : bx;
-    const d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${by} L ${midX} ${by} L ${bx} ${by}`;
+    let d;
+    if (bx < ax) {
+      // Variante B: Ziel liegt links der Quelle → doppelten Abstand zurückspringen
+      const dist = ax - bx;
+      const approachX = bx - 2 * dist;
+      const midY = (ay + by) / 2;
+      d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${midY} L ${approachX} ${midY} L ${approachX} ${by} L ${bx} ${by}`;
+    } else {
+      const midX = enterX > channelX ? enterX : bx;
+      d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${by} L ${midX} ${by} L ${bx} ${by}`;
+    }
     const p = document.createElementNS(SVGNS, "path");
     p.setAttribute("d", d); p.setAttribute("class", "gp-link");
     p.setAttribute("stroke", lk.color); p.setAttribute("marker-end", "url(#gp-arrow)");
