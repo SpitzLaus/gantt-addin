@@ -958,15 +958,20 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
     default: x1 = a.right; x2 = b.left; break; // finish-start
   }
   const y1 = a.mid, y2 = b.mid;
-  // Pauschal: 30px waagerecht vor der Pfeilspitze. Der senkrechte Abschnitt
-  // liegt bei approachX = x2 - 30, danach läuft die Route waagerecht in die
-  // Pfeilspitze am Zielpunkt (Pfeil zeigt nach rechts).
-  const approach = 30;
-  const approachX = x2 - approach;
-  hSeg(shapes, created, x1, approachX, y1, color);
-  vSeg(shapes, created, approachX, y1, y2, color);
-  hSeg(shapes, created, approachX, x2, y2, color);
-  arrowHead(shapes, created, x2, y2, "right", color);
+  const gap = 12;
+  // vertical channel sits in white space just right of the source element
+  const channelX = x1 + gap;
+  const enterX = x2 - gap;
+
+  hSeg(shapes, created, x1, channelX, y1, color);
+  vSeg(shapes, created, channelX, y1, y2, color);
+  if (enterX > channelX) {
+    hSeg(shapes, created, channelX, enterX, y2, color);
+    arrowHead(shapes, created, x2, y2, x2 >= enterX ? "right" : "left", color);
+  } else {
+    hSeg(shapes, created, channelX, x2, y2, color);
+    arrowHead(shapes, created, x2, y2, "left", color);
+  }
 }
 
 // Thin horizontal line segment (a filled rectangle — always perfectly level).
@@ -1236,9 +1241,10 @@ function renderPreview() {
       default: ax = a.right; bx = b.left; break;
     }
     const ay = a.mid, by = b.mid;
-    // Pauschal: 30px waagerecht vor der Pfeilspitze.
-    const approachX = bx - 30;
-    const d = `M ${ax} ${ay} L ${approachX} ${ay} L ${approachX} ${by} L ${bx} ${by}`;
+    const channelX = ax + 12;
+    const enterX = bx - 12;
+    const midX = enterX > channelX ? enterX : bx;
+    const d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${by} L ${midX} ${by} L ${bx} ${by}`;
     const p = document.createElementNS(SVGNS, "path");
     p.setAttribute("d", d); p.setAttribute("class", "gp-link");
     p.setAttribute("stroke", lk.color); p.setAttribute("marker-end", "url(#gp-arrow)");
