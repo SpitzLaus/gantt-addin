@@ -654,39 +654,15 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
     default: x1 = a.right; x2 = b.left; break; // finish-start
   }
   const y1 = a.mid, y2 = b.mid;
-  const gap = 12;
-  // vertical channel sits in white space just right of the source element
-  const channelX = x1 + gap;
-  const enterX = x2 - gap;
-
-  // Variante B: Wenn das Ziel links der Quelle liegt (rückwärts laufende
-  // Verbindung), ermittle den Abstand d = x1 - x2 und springe für Punkt 2 den
-  // doppelten Abstand zurück (approachX = x2 - 2*d). Von dort läuft die Route im
-  // Weißbereich zwischen den Zeilen um beide Balken herum und trifft Punkt 2 von
-  // links, sodass der Pfeil nach rechts in das Ziel zeigt. Liegen beide Punkte
-  // auf demselben Tag (d = 0), wird pauschal 12px zurückgesprungen.
-  if (x2 <= x1) {
-    const d = x1 - x2;
-    const approachX = x2 - Math.max(2 * d, 100);
-    const midY = (y1 + y2) / 2;
-    hSeg(shapes, created, x1, channelX, y1, color);
-    vSeg(shapes, created, channelX, y1, midY, color);
-    hSeg(shapes, created, channelX, approachX, midY, color);
-    vSeg(shapes, created, approachX, midY, y2, color);
-    hSeg(shapes, created, approachX, x2, y2, color);
-    arrowHead(shapes, created, x2, y2, "right", color);
-    return;
-  }
-
-  hSeg(shapes, created, x1, channelX, y1, color);
-  vSeg(shapes, created, channelX, y1, y2, color);
-  if (enterX > channelX) {
-    hSeg(shapes, created, channelX, enterX, y2, color);
-    arrowHead(shapes, created, x2, y2, x2 >= enterX ? "right" : "left", color);
-  } else {
-    hSeg(shapes, created, channelX, x2, y2, color);
-    arrowHead(shapes, created, x2, y2, "left", color);
-  }
+  // Pauschal: 30px waagerecht vor der Pfeilspitze. Der senkrechte Abschnitt
+  // liegt bei approachX = x2 - 30, danach läuft die Route waagerecht in die
+  // Pfeilspitze am Zielpunkt (Pfeil zeigt nach rechts).
+  const approach = 30;
+  const approachX = x2 - approach;
+  hSeg(shapes, created, x1, approachX, y1, color);
+  vSeg(shapes, created, approachX, y1, y2, color);
+  hSeg(shapes, created, approachX, x2, y2, color);
+  arrowHead(shapes, created, x2, y2, "right", color);
 }
 
 // Thin horizontal line segment (a filled rectangle — always perfectly level).
@@ -956,19 +932,9 @@ function renderPreview() {
       default: ax = a.right; bx = b.left; break;
     }
     const ay = a.mid, by = b.mid;
-    const channelX = ax + 12;
-    const enterX = bx - 12;
-    let d;
-    if (bx <= ax) {
-      // Variante B: Ziel liegt links der Quelle → doppelten Abstand zurückspringen
-      const dist = ax - bx;
-      const approachX = bx - Math.max(2 * dist, 100);
-      const midY = (ay + by) / 2;
-      d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${midY} L ${approachX} ${midY} L ${approachX} ${by} L ${bx} ${by}`;
-    } else {
-      const midX = enterX > channelX ? enterX : bx;
-      d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${by} L ${midX} ${by} L ${bx} ${by}`;
-    }
+    // Pauschal: 30px waagerecht vor der Pfeilspitze.
+    const approachX = bx - 30;
+    const d = `M ${ax} ${ay} L ${approachX} ${ay} L ${approachX} ${by} L ${bx} ${by}`;
     const p = document.createElementNS(SVGNS, "path");
     p.setAttribute("d", d); p.setAttribute("class", "gp-link");
     p.setAttribute("stroke", lk.color); p.setAttribute("marker-end", "url(#gp-arrow)");
