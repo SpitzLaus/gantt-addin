@@ -31,7 +31,6 @@ const MAX_ROW_HEIGHT = 40;
 let rowCounter = 0;
 let segCounter = 0;
 let linkCounter = 0;
-let dateClipboard = null;        // for copy/paste of dates
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.PowerPoint) {
@@ -43,7 +42,7 @@ Office.onReady((info) => {
     document.getElementById("syncSlide").onclick = syncFromSlide;
     document.getElementById("startDate").onchange = renderPreview;
     document.getElementById("endDate").onchange = renderPreview;
-    document.querySelectorAll(".scaleOpt, #optDates, #optWorkdays, #optToday, #optFit")
+    document.querySelectorAll(".scaleOpt, #optDates, #optToday, #optFit")
       .forEach((el) => { el.onchange = renderPreview; });
     initDefaults();
     afterModelChange();
@@ -141,7 +140,7 @@ function defaultSegment() {
   const start = new Date();
   const end = new Date(start);
   end.setDate(end.getDate() + 7);
-  return { type: "bar", start: toInputDate(start), end: toInputDate(end), label: "", color: "", showDate: true };
+  return { type: "bar", start: toInputDate(start), end: toInputDate(end), label: "", color: "", showDate: true, showWorkdays: false };
 }
 
 function addSegment(taskEl, seg = {}) {
@@ -165,8 +164,7 @@ function addSegment(taskEl, seg = {}) {
     <div class="seg-tools">
       <input class="seg-color" type="color" value="${s.color}" title="Farbe" />
       <label class="seg-date-toggle" title="Datum im Chart anzeigen"><input class="seg-showdate" type="checkbox" ${s.showDate ? "checked" : ""} />📅</label>
-      <button class="icon-btn seg-copy" type="button" title="Datum kopieren">⧉</button>
-      <button class="icon-btn seg-paste" type="button" title="Datum einfügen">⇩</button>
+      <label class="seg-date-toggle" title="Netto-Arbeitstage anzeigen"><input class="seg-showworkdays" type="checkbox" ${s.showWorkdays ? "checked" : ""} />AT</label>
       <button class="icon-btn seg-remove" type="button" title="Segment entfernen">×</button>
     </div>`;
 
@@ -186,17 +184,8 @@ function addSegment(taskEl, seg = {}) {
   row.querySelector(".seg-label").oninput = renderPreview;
   row.querySelector(".seg-color").oninput = renderPreview;
   row.querySelector(".seg-showdate").onchange = renderPreview;
+  row.querySelector(".seg-showworkdays").onchange = renderPreview;
 
-  row.querySelector(".seg-copy").onclick = () => {
-    dateClipboard = { start: startInp.value, end: endInp.value };
-    setStatus("Datum kopiert.", "success");
-  };
-  row.querySelector(".seg-paste").onclick = () => {
-    if (!dateClipboard) { setStatus("Zwischenablage leer – erst ⧉ nutzen.", "error"); return; }
-    if (dateClipboard.start) startInp.value = dateClipboard.start;
-    if (dateClipboard.end) endInp.value = dateClipboard.end;
-    validateSegment(row); renderPreview();
-  };
   row.querySelector(".seg-remove").onclick = () => {
     if (container.children.length > 1) { row.remove(); renderPreview(); }
     else setStatus("Eine Task braucht mindestens ein Segment.", "error");
@@ -262,7 +251,8 @@ function readModel() {
           end: type === "milestone" ? new Date(startV) : new Date(endV),
           label: sr.querySelector(".seg-label").value.trim(),
           color: sr.querySelector(".seg-color").value,
-          showDate: sr.querySelector(".seg-showdate").checked
+          showDate: sr.querySelector(".seg-showdate").checked,
+          showWorkdays: sr.querySelector(".seg-showworkdays").checked
         });
       });
       rows.push({ kind: "task", name, segments });
@@ -478,7 +468,6 @@ async function insertGantt() {
 
   const title = document.getElementById("chartTitle").value || "Projekt-Timeline";
   const scales = selectedScales();
-  const showWorkdays = document.getElementById("optWorkdays").checked;
   const showToday = document.getElementById("optToday").checked;
   const doFit = document.getElementById("optFit").checked;
   const L = computeLayout(model, scales);
@@ -558,7 +547,7 @@ async function insertGantt() {
 
         let taskLeft = Infinity, taskRight = -Infinity;
         row.segments.forEach((seg) => {
-          const drawn = drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, showWorkdays);
+          const drawn = drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end);
           taskLeft = Math.min(taskLeft, drawn.left);
           taskRight = Math.max(taskRight, drawn.right);
         });
@@ -602,7 +591,7 @@ async function insertGantt() {
 }
 
 // Draw one segment (bar or milestone) on a task row. Returns {left,right}.
-function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, showWorkdays) {
+function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end) {
   const barHeight = Math.min(18, L.rowH - 8);
   if (seg.type === "milestone") {
     const cx = xFor(seg.start);
@@ -647,7 +636,7 @@ function drawSegment(shapes, created, seg, rowTop, rowMid, L, xFor, start, end, 
     created.push(addText(shapes, fmtDate(seg.end), right - 44, barTop + barHeight, 44, 12,
       { size: 8, color: "#6b6b73", align: "right" }));
   }
-  if (showWorkdays) {
+  if (seg.showWorkdays) {
     created.push(addText(shapes, `${netWorkdays(seg.start, seg.end)} AT`, right + 4, barTop, 60, barHeight,
       { size: 8, color: "#6b6b73", valign: "middle" }));
   }
@@ -833,7 +822,6 @@ function renderPreview() {
   const model = readModel();
   const scales = selectedScales();
   const showDatesGlobal = document.getElementById("optDates").checked;
-  const showWorkdays = document.getElementById("optWorkdays").checked;
   const showToday = document.getElementById("optToday").checked;
 
   const allSegs = model.filter((r) => r.kind === "task").flatMap((r) => r.segments);
@@ -932,7 +920,7 @@ function renderPreview() {
         const el = text(svg, x2, barTop + PV.barH + 9, fmtDate(seg.end), "gp-datelbl");
         el.setAttribute("text-anchor", "end");
       }
-      if (showWorkdays) text(svg, x2 + 5, rowMid + 3, `${netWorkdays(seg.start, seg.end)} AT`, "gp-datelbl");
+      if (seg.showWorkdays) text(svg, x2 + 5, rowMid + 3, `${netWorkdays(seg.start, seg.end)} AT`, "gp-datelbl");
       taskLeft = Math.min(taskLeft, x1); taskRight = Math.max(taskRight, x2);
     });
     if (row.name) geom[row.name] = { left: taskLeft, right: taskRight, mid: rowMid };

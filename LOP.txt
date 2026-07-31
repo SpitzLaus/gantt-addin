@@ -13,7 +13,8 @@
 [x] 13. Enddatum darf numerisch nicht hinterm startdatum liegen - soll er immer prüfen und bei Nichteinhaltung rot markieren
 [x] 14. chart soll auf foliengröße angepasst werden und alles in einer gruppe zusammenfasst
 [x] 15. jeder Balken/Milestone mit der möglichkeit der Datumsanzeige im Chart. Wie auch net workdays
-
+16. datum ein ausblenden jeweils für start bzw. enddatum
+17. datum soll sich in der gruppierung auch in größenrealtion von verändern
 
 
 
