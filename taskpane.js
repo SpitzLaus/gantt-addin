@@ -667,7 +667,7 @@ function drawDependency(shapes, created, a, b, style, color, rowH) {
   // auf demselben Tag (d = 0), wird pauschal 12px zurückgesprungen.
   if (x2 <= x1) {
     const d = x1 - x2;
-    const approachX = x2 - Math.max(2 * d, gap);
+    const approachX = x2 - Math.max(2 * d, 100);
     const midY = (y1 + y2) / 2;
     hSeg(shapes, created, x1, channelX, y1, color);
     vSeg(shapes, created, channelX, y1, midY, color);
@@ -962,7 +962,7 @@ function renderPreview() {
     if (bx <= ax) {
       // Variante B: Ziel liegt links der Quelle → doppelten Abstand zurückspringen
       const dist = ax - bx;
-      const approachX = bx - Math.max(2 * dist, 12);
+      const approachX = bx - Math.max(2 * dist, 100);
       const midY = (ay + by) / 2;
       d = `M ${ax} ${ay} L ${channelX} ${ay} L ${channelX} ${midY} L ${approachX} ${midY} L ${approachX} ${by} L ${bx} ${by}`;
     } else {
